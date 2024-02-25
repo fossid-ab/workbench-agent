@@ -1,0 +1,15 @@
+name: lint
+on: [push, pull_request]
+jobs:
+  code_linting:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - name: Code linters
+        run: |
+          pip install -r requirements.txt
+          pycodestyle workbench-agent.py
+          pylint --errors-only --rcfile .pylintrc workbench-agent.py
+          
+          
+
