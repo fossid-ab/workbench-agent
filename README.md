@@ -184,22 +184,21 @@ optional arguments:
 
 Thank you for considering contributing to FossID Workbench-Agent. Easiest way to contribute is by reporting bugs or by
 sending improvement suggestions. The FossID Support Portal is the preferred channel for sending those, but you can use
-the Issues in GitHub repository is an alternative channel.
+the Issues in GitHub repository as an alternative channel.
 
 Pull requests are also welcomed. Please note that the Workbench-Agent is licensed under MIT license.
 The submission of your contribution implies that you agree with MIT licensing terms.
 
 ## Development
 
-We make efforts to comply with PEP8 Style guide (https://peps.python.org/pep-0008/)
+Code style 
+
+We make efforts to comply with PEP8 Style guide (https://peps.python.org/pep-0008/).
 Run this command for checking code style issues:
 ```bash
     pycodestyle workbench-agent.py 
 ```
-Using 'black' auto-formatter various problems can be fixed with this command:
-```bash
-    black workbench-agent.py
-```
+
 Linting
 
 Run pylint in order reveal possible issues:
