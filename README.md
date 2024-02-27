@@ -105,11 +105,27 @@ Example:
 Detailed parameters description:
 ```bash
  python3 workbench-agent.py --help
-usage:  python3 workbench-agent.py [-h] --api_url API_URL --api_user API_USER --api_token API_TOKEN --project_code PROJECT_CODE --scan_code SCAN_CODE [--limit LIMIT]
-                          [--sensitivity SENSITIVITY] [--auto_identification_detect_declaration] [--auto_identification_detect_copyright]
-                          [--auto_identification_resolve_pending_ids] [--delta_only] [--reuse_identifications]
-                          [--identification_reuse_type {any,only_me,specific_project,specific_scan}] [--specific_code SPECIFIC_CODE]
-                          [--scan_number_of_tries SCAN_NUMBER_OF_TRIES] [--scan_wait_time SCAN_WAIT_TIME] --path PATH [--log LOG] [--get_scan_identified_components]
+usage: workbench-agent.py [-h] --api_url API_URL --api_user API_USER
+                          --api_token API_TOKEN --project_code PROJECT_CODE
+                          --scan_code SCAN_CODE [--limit LIMIT]
+                          [--sensitivity SENSITIVITY]
+                          [--recursively_extract_archives]
+                          [--jar_file_extraction]
+                          [--blind_scan]
+                          [--run_dependency_analysis]
+                          [--run_only_dependency_analysis]
+                          [--auto_identification_detect_declaration]
+                          [--auto_identification_detect_copyright]
+                          [--auto_identification_resolve_pending_ids]
+                          [--delta_only] [--reuse_identifications]
+                          [--identification_reuse_type {any,only_me,specific_project,specific_scan}]
+                          [--specific_code SPECIFIC_CODE]
+                          [--scan_number_of_tries SCAN_NUMBER_OF_TRIES]
+                          [--scan_wait_time SCAN_WAIT_TIME] --path PATH
+                          [--log LOG] [--path-result PATH_RESULT]
+                          [--get_scan_identified_components]
+                          [--scans_get_policy_warnings_counter]
+                          [--projects_get_policy_warnings_info]
 
 Run FossID Workbench Agent
 
@@ -120,14 +136,14 @@ required arguments:
                         Workbench user API token (Not the same with user password!!!)
   --project_code PROJECT_CODE
                         Name of the project inside Workbench where the scan will be created.
-                        If the project doesnt exist, it will be created
+                        If the project doesn't exist, it will be created
   --scan_code SCAN_CODE
-                        The scan code used when creating the scan in Workbench. It can be based on some env var,
+                        The scan code user when creating the scan in Workbench. It can be based on some env var,
                         for example:  ${BUILD_NUMBER}
   --scan_number_of_tries SCAN_NUMBER_OF_TRIES
-                        Number of calls to "check_status" till declaring the scan failed from the point of view of the agent.
+                        Number of calls to 'check_status' till declaring the scan failed from the point of view of the agent
   --scan_wait_time SCAN_WAIT_TIME
-                        Time interval between calling "check_status", expressed in seconds (default 30 seconds)
+                        Time interval between calling 'check_status', expressed in seconds (default 30 seconds)
   --path PATH           Path of the directory where the files to be scanned reside
 
 optional arguments:
@@ -135,6 +151,15 @@ optional arguments:
   --limit LIMIT         Limits CLI results to N most significant matches (default: 10)
   --sensitivity SENSITIVITY
                         Sets snippet sensitivity to a minimum of N lines (default: 10)
+  --recursively_extract_archives
+                        Recursively extract nested archives. Default true.
+  --jar_file_extraction
+                        Control default behavior related to extracting jar files. Default false.
+  --blind_scan          Call CLI and generate file hashes. Upload hashes and initiate blind scan.
+  --run_dependency_analysis
+                        Initiate dependency analysis after finishing scanning for matches in KB.
+  --run_only_dependency_analysis
+                        Scan only for dependencies, no results from KB.
   --auto_identification_detect_declaration
                         Automatically detect license declaration inside files. This argument expects no value, not passing
                         this argument is equivalent to assigning false.
@@ -145,22 +170,17 @@ optional arguments:
                         Automatically resolve pending identifications. This argument expects no value, not passing
                         this argument is equivalent to assigning false.
   --delta_only          Scan only delta (newly added files from last scan).
-  --run_dependency_analysis
-                        Initiate dependency analysis after finishing scanning for matches in KB.
-  --run_only_dependency_analysis
-                        Scan only for dependencies, no results from KB.
   --reuse_identifications
-                        If present, try to use an existing identification depending on parameter "identification_reuse_type".
+                        If present, try to use an existing identification depending on parameter ‘identification_reuse_type‘.
   --identification_reuse_type {any,only_me,specific_project,specific_scan}
                         Based on reuse type last identification found will be used for files with the same hash.
   --specific_code SPECIFIC_CODE
-                        The scan code user when creating the scan in Workbench. It can be based on some env var,
+                        The scan code used when creating the scan in Workbench. It can be based on some env var,
                         for example:  ${BUILD_NUMBER}
   --log LOG             specify logging level. Allowed values: DEBUG, INFO, WARNING, ERROR
   --path-result PATH_RESULT
                         Save results to specified path
-
-  --get_scan_identified_components 
+  --get_scan_identified_components
                         By default at the end of scanning the list of licenses identified will be retrieved.
                         When passing this parameter the agent will return the list of identified components instead.
                         This argument expects no value, not passing this argument is equivalent to assigning false.
@@ -169,13 +189,11 @@ optional arguments:
                         When passing this parameter the agent will return information about policy warnings found in this scan
                         based on policy rules set at Project level.
                         This argument expects no value, not passing this argument is equivalent to assigning false.
-
   --projects_get_policy_warnings_info
                         By default at the end of scanning the list of licenses identified will be retrieved.
                         When passing this parameter the agent will return information about policy warnings for project,
                         including the warnings counter.
                         This argument expects no value, not passing this argument is equivalent to assigning false.
-
 
 ```
 
