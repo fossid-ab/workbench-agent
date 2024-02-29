@@ -66,7 +66,17 @@ class Workbench:
             "POST", url, headers=headers, data=req_body, timeout=1800
         )
         logger.debug(response.text)
-        return json.loads(response.text)
+        try:
+            # Attempt to parse the JSON
+            parsed_json = json.loads(response.text)
+            return parsed_json
+        except json.JSONDecodeError as e:
+            # If an error occurs, catch it and display the message along with the problematic JSON
+            print("Failed to decode JSON")
+            print(f"Error message: {e.msg}")
+            print(f"At position: {e.pos}")
+            print("Problematic JSON:")
+            print(response.text)
 
     def upload_files(self, scan_code: str, path: str):
         """
@@ -818,6 +828,13 @@ def parse_cmdline_args():
     Returns:
         argparse.Namespace: An object containing the parsed command line arguments.
     """
+
+    # Define a custom type function which will verify for empty string
+    def non_empty_string(s):
+        if not s.strip():
+            raise argparse.ArgumentTypeError("Argument cannot be empty or just whitespace.")
+        return s
+
     parser = argparse.ArgumentParser(
         add_help=False,
         description="Run FossID Workbench Agent",
@@ -838,33 +855,33 @@ def parse_cmdline_args():
     required.add_argument(
         "--api_url",
         help="URL of the Workbench API instance, Ex:  https://myserver.com/api.php",
-        type=str,
+        type=non_empty_string,
         required=True,
     )
     required.add_argument(
         "--api_user",
         help="Workbench user that will make API calls",
-        type=str,
+        type=non_empty_string,
         required=True,
     )
     required.add_argument(
         "--api_token",
         help="Workbench user API token (Not the same with user password!!!)",
-        type=str,
+        type=non_empty_string,
         required=True,
     )
     required.add_argument(
         "--project_code",
         help="Name of the project inside Workbench where the scan will be created.\n"
         "If the project doesn't exist, it will be created",
-        type=str,
+        type=non_empty_string,
         required=True,
     )
     required.add_argument(
         "--scan_code",
         help="The scan code user when creating the scan in Workbench. It can be based on some env var,\n"
         "for example:  ${BUILD_NUMBER}",
-        type=str,
+        type=non_empty_string,
         required=True,
     )
     optional.add_argument(
