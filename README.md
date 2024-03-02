@@ -96,7 +96,7 @@ Example:
       --delta_only \
       --scan_number_of_tries=100 \
       --scan_wait_time=30 \
-      --path='/some/path/to/files/to/be/scanned'
+      --path='/some/path/to/files/to/be/scanned' \
       --path-result='/tmp/fossid_result.json'
 
       
