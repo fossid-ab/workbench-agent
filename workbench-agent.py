@@ -132,13 +132,14 @@ class Workbench:
         }
         return self._send_request(payload)
 
-    def create_webapp_scan(self, scan_code: str, project_code: str = None) -> bool:
+    def create_webapp_scan(self, scan_code: str, project_code: str = None, target_path: str = None) -> bool:
         """
         Creates a new web application scan in the Workbench.
 
         Args:
             scan_code (str): The unique identifier for the scan.
             project_code (str, optional): The project code within which to create the scan.
+            target_path (str, optional): The target path where scan is stored.
 
         Returns:
             bool: True if the scan was successfully created, False otherwise.
@@ -152,6 +153,7 @@ class Workbench:
                 "scan_code": scan_code,
                 "scan_name": scan_code,
                 "project_code": project_code,
+                "target_path": target_path,
                 "description": "Automatically created scan by Workbench Agent script.",
             },
         }
@@ -976,6 +978,14 @@ def parse_cmdline_args():
         type=str,
         required=False,
     )
+
+    optional.add_argument(
+        "--target_path",
+        help="The path on the Workbench server where the code to be scanned is stored.\n"
+             "No upload is done in this scenario.",
+        type=str,
+        required=False,
+    )
     required.add_argument(
         "--scan_number_of_tries",
         help="""Number of calls to 'check_status' till declaring the scan failed from the point of view of the agent""",
@@ -1143,7 +1153,7 @@ def main():
         print(
             f"Scan with code {params.scan_code} does not exist. Calling API to create it..."
         )
-        workbench.create_webapp_scan(params.scan_code, params.project_code)
+        workbench.create_webapp_scan(params.scan_code, params.project_code, params.target_path)
     else:
         print(
             f"Scan with code {params.scan_code} already exists. Proceeding to uploading hashes..."
@@ -1164,7 +1174,8 @@ def main():
                 )
             )
     # Handle normal scanning (directly uploading files at given path instead of generating hashes with CLI)
-    else:
+    # There is no file upload when scanning from target path
+    elif not params.target_path:
         if not os.path.isdir(params.path):
             # The given path is an actual file path. Only this file will be uploaded
             print(
