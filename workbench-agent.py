@@ -434,6 +434,36 @@ class Workbench:
             )
         )
 
+    def get_results(self, scan_code: str):
+        """
+        Retrieve the list matches from one scan.
+
+        Args:
+            scan_code (str): The unique identifier for the scan.
+
+        Returns:
+            dict: The JSON response from the API.
+        """
+        payload = {
+            "group": "scans",
+            "action": "get_results",
+            "data": {
+                "username": self.api_user,
+                "key": self.api_token,
+                "scan_code": scan_code,
+                "unique": "1",
+            },
+        }
+        response = self._send_request(payload)
+        if response["status"] == "1" and "data" in response.keys():
+            return response["data"]
+        raise builtins.Exception(
+            "Error getting scans ->get_results \
+            result: {}".format(
+                response
+            )
+        )
+
     def _get_dependency_analysis_result(self, scan_code: str):
         """
         Retrieve dependency analysis results.
@@ -1046,6 +1076,15 @@ def parse_cmdline_args():
         action="store_true",
         default=False,
     )
+    optional.add_argument(
+        "--scans_get_results",
+        help="By default at the end of scanning the list of licenses identified will be retrieved.\n"
+        "When passing this parameter the agent will return information about policy warnings found in this scan\n"
+        "based on policy rules set at Project level.\n"
+        "This argument expects no value, not passing this argument is equivalent to assigning false.",
+        action="store_true",
+        default=False,
+    )
 
     args = parser.parse_args()
     return args
@@ -1286,6 +1325,15 @@ def main():
         info_policy = workbench.projects_get_policy_warnings_info(params.project_code)
         print(json.dumps(info_policy))
         save_results(params=params, results=info_policy)
+        sys.exit(0)
+    # When scan finished retrieve project policy warnings info
+    # projects ->  get_policy_warnings_info
+    elif params.scans_get_results:
+
+        print(f"Scan {params.scan_code} results: ")
+        results = workbench.get_results(params.scan_code)
+        print(json.dumps(results))
+        save_results(params=params, results=results)
         sys.exit(0)
     else:
         print("Identified licenses: ")
