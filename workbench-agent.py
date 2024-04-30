@@ -80,11 +80,11 @@ class Workbench:
 
     def upload_files(self, scan_code: str, path: str):
         """
-        Uploads a .fossid file to the Workbench using the API's Upload endpoint.
+        Uploads files to the Workbench using the API's File Upload endpoint.
 
         Args:
-            scan_code (str): The code of the scan where the hashes should be uploaded.
-            path (str): Path to the blind scan result (.fossid file).
+            scan_code (str): The scan code where the file or files will be uploaded.
+            path (str): Path to the file or files to upload.
         """
         name = base64.b64encode(os.path.basename(path).encode()).decode("utf-8")
         scan_code = base64.b64encode(scan_code.encode()).decode("utf-8")
@@ -106,7 +106,7 @@ class Workbench:
                     sys.exit(1)
         except IOError:
             # Error opening file
-            print(f"Failed to upload hashes for scan {scan_code}")
+            print(f"Failed to upload files to the scan {scan_code}.")
             print(traceback.print_exc())
             sys.exit(1)
 
@@ -134,7 +134,7 @@ class Workbench:
 
     def create_webapp_scan(self, scan_code: str, project_code: str = None) -> bool:
         """
-        Creates a new web application scan in the Workbench.
+        Creates a Scan in Workbench. The scan can optionally be created inside a Project.
 
         Args:
             scan_code (str): The unique identifier for the scan.
@@ -152,7 +152,7 @@ class Workbench:
                 "scan_code": scan_code,
                 "scan_name": scan_code,
                 "project_code": project_code,
-                "description": "Automatically created scan by Workbench Agent script.",
+                "description": "Scan created using the Workbench Agent.",
             },
         }
         response = self._send_request(payload)

@@ -1,0 +1,31 @@
+name: Publish Container Image to GHCR
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: workbench-agent
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+      
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Container Image
+        run: docker build . --file Dockerfile --tag $IMAGE_NAME
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        #
+      - name: Push image
+        run: |
+          IMAGE_ID=ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME
+          docker tag $IMAGE_NAME $IMAGE_ID:latest
+          docker push $IMAGE_ID:latest
