@@ -17,6 +17,8 @@ jobs:
       
     steps:
       - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -28,12 +30,5 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-      
-      - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-        #
-      - name: Push image
-        run: |
-          IMAGE_ID=ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME
-          docker tag $IMAGE_NAME $IMAGE_ID:latest
-          docker push $IMAGE_ID:latest
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/$IMAGE_NAME:latest
