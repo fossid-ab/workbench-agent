@@ -132,13 +132,14 @@ class Workbench:
         }
         return self._send_request(payload)
 
-    def create_webapp_scan(self, scan_code: str, project_code: str = None) -> bool:
+    def create_webapp_scan(self, scan_code: str, project_code: str = None, target_path: str = None) -> bool:
         """
         Creates a Scan in Workbench. The scan can optionally be created inside a Project.
 
         Args:
             scan_code (str): The unique identifier for the scan.
             project_code (str, optional): The project code within which to create the scan.
+            target_path (str, optional): The target path where scan is stored.
 
         Returns:
             bool: True if the scan was successfully created, False otherwise.
@@ -152,6 +153,7 @@ class Workbench:
                 "scan_code": scan_code,
                 "scan_name": scan_code,
                 "project_code": project_code,
+                "target_path": target_path,
                 "description": "Scan created using the Workbench Agent.",
             },
         }
@@ -427,6 +429,36 @@ class Workbench:
             return response["data"]
         raise builtins.Exception(
             "Error getting identified licenses \
+            result: {}".format(
+                response
+            )
+        )
+
+    def get_results(self, scan_code: str):
+        """
+        Retrieve the list matches from one scan.
+
+        Args:
+            scan_code (str): The unique identifier for the scan.
+
+        Returns:
+            dict: The JSON response from the API.
+        """
+        payload = {
+            "group": "scans",
+            "action": "get_results",
+            "data": {
+                "username": self.api_user,
+                "key": self.api_token,
+                "scan_code": scan_code,
+                "unique": "1",
+            },
+        }
+        response = self._send_request(payload)
+        if response["status"] == "1" and "data" in response.keys():
+            return response["data"]
+        raise builtins.Exception(
+            "Error getting scans ->get_results \
             result: {}".format(
                 response
             )
@@ -976,6 +1008,14 @@ def parse_cmdline_args():
         type=str,
         required=False,
     )
+
+    optional.add_argument(
+        "--target_path",
+        help="The path on the Workbench server where the code to be scanned is stored.\n"
+             "No upload is done in this scenario.",
+        type=str,
+        required=False,
+    )
     required.add_argument(
         "--scan_number_of_tries",
         help="""Number of calls to 'check_status' till declaring the scan failed from the point of view of the agent""",
@@ -1032,6 +1072,15 @@ def parse_cmdline_args():
         help="By default at the end of scanning the list of licenses identified will be retrieved.\n"
         "When passing this parameter the agent will return information about policy warnings for project,\n"
         "including the warnings counter.\n"
+        "This argument expects no value, not passing this argument is equivalent to assigning false.",
+        action="store_true",
+        default=False,
+    )
+    optional.add_argument(
+        "--scans_get_results",
+        help="By default at the end of scanning the list of licenses identified will be retrieved.\n"
+        "When passing this parameter the agent will return information about policy warnings found in this scan\n"
+        "based on policy rules set at Project level.\n"
         "This argument expects no value, not passing this argument is equivalent to assigning false.",
         action="store_true",
         default=False,
@@ -1143,7 +1192,7 @@ def main():
         print(
             f"Scan with code {params.scan_code} does not exist. Calling API to create it..."
         )
-        workbench.create_webapp_scan(params.scan_code, params.project_code)
+        workbench.create_webapp_scan(params.scan_code, params.project_code, params.target_path)
     else:
         print(
             f"Scan with code {params.scan_code} already exists. Proceeding to uploading hashes..."
@@ -1164,7 +1213,8 @@ def main():
                 )
             )
     # Handle normal scanning (directly uploading files at given path instead of generating hashes with CLI)
-    else:
+    # There is no file upload when scanning from target path
+    elif not params.target_path:
         if not os.path.isdir(params.path):
             # The given path is an actual file path. Only this file will be uploaded
             print(
@@ -1275,6 +1325,15 @@ def main():
         info_policy = workbench.projects_get_policy_warnings_info(params.project_code)
         print(json.dumps(info_policy))
         save_results(params=params, results=info_policy)
+        sys.exit(0)
+    # When scan finished retrieve project policy warnings info
+    # projects ->  get_policy_warnings_info
+    elif params.scans_get_results:
+
+        print(f"Scan {params.scan_code} results: ")
+        results = workbench.get_results(params.scan_code)
+        print(json.dumps(results))
+        save_results(params=params, results=results)
         sys.exit(0)
     else:
         print("Identified licenses: ")
