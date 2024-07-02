@@ -78,37 +78,86 @@ class Workbench:
             print("Problematic JSON:")
             print(response.text)
 
-    def upload_files(self, scan_code: str, path: str):
+    def _read_in_chunks(self, file_object, chunk_size=5120):
+        """Generator to read a file piece by piece."""
+        while True:
+            data = file_object.read(chunk_size)
+            if not data:
+                break
+            yield data
+
+    def upload_files(self, scan_code: str, path: str, enable_chunk_upload: bool = True):
         """
         Uploads files to the Workbench using the API's File Upload endpoint.
 
         Args:
             scan_code (str): The scan code where the file or files will be uploaded.
             path (str): Path to the file or files to upload.
+            enable_chunk_upload (bool): Enable/disable chunk upload. By default, enabled.
         """
-        name = base64.b64encode(os.path.basename(path).encode()).decode("utf-8")
-        scan_code = base64.b64encode(scan_code.encode()).decode("utf-8")
-        headers = {"FOSSID-SCAN-CODE": scan_code, "FOSSID-FILE-NAME": name}
-        try:
-            with open(path, "rb") as file:
-                resp = requests.post(
-                    self.api_url,
-                    headers=headers,
-                    data=file,
-                    auth=(self.api_user, self.api_token),
-                    timeout=1800,
-                )
-                try:
-                    resp.json()
-                except:
-                    print(f"Failed to decode json {resp.text}")
-                    print(traceback.print_exc())
-                    sys.exit(1)
-        except IOError:
-            # Error opening file
-            print(f"Failed to upload files to the scan {scan_code}.")
-            print(traceback.print_exc())
-            sys.exit(1)
+        file_size = os.path.getsize(path)
+        size_limit = 8 * 1024 * 1024  # 8MB in bytes. Based on the default value of post_max_size in php.ini
+        # Prepare parameters
+        filename = os.path.basename(path)
+        filename_base64 = base64.b64encode(filename.encode()).decode("utf-8")
+        scan_code_base64 = base64.b64encode(scan_code.encode()).decode("utf-8")
+
+        if enable_chunk_upload and (file_size > size_limit):
+            print(f"Uploading {filename} using 'Transfer-encoding: chunks' due to file size {file_size}.")
+            # Use chunked upload for files bigger than size_limit
+            # First delete possible existing files because chunk uploading works by appending existing file on disk.
+            self.remove_uploaded_content(filename, scan_code)
+            headers = {
+                "FOSSID-SCAN-CODE": scan_code_base64,
+                "FOSSID-FILE-NAME": filename_base64,
+                'Transfer-Encoding': 'chunked'
+            }
+            try:
+                with open(path, "rb") as file:
+                    resp = requests.post(
+                        self.api_url,
+                        headers=headers,
+                        data=self._read_in_chunks(file, 5120),
+                        auth=(self.api_user, self.api_token),
+                        timeout=1800,
+                    )
+                    try:
+                        resp.json()
+                    except:
+                        print(f"Failed to decode json {resp.text}")
+                        print(traceback.print_exc())
+                        sys.exit(1)
+            except IOError:
+                # Error opening file
+                print(f"Failed to upload files to the scan {scan_code}.")
+                print(traceback.print_exc())
+                sys.exit(1)
+        else:
+            # Regular upload, no chunk upload
+            headers = {
+                "FOSSID-SCAN-CODE": scan_code_base64,
+                "FOSSID-FILE-NAME": filename_base64
+            }
+            try:
+                with open(path, "rb") as file:
+                    resp = requests.post(
+                        self.api_url,
+                        headers=headers,
+                        data=file,
+                        auth=(self.api_user, self.api_token),
+                        timeout=1800,
+                    )
+                    try:
+                        resp.json()
+                    except:
+                        print(f"Failed to decode json {resp.text}")
+                        print(traceback.print_exc())
+                        sys.exit(1)
+            except IOError:
+                # Error opening file
+                print(f"Failed to upload files to the scan {scan_code}.")
+                print(traceback.print_exc())
+                sys.exit(1)
 
     def _delete_existing_scan(self, scan_code: str):
         """
@@ -750,6 +799,32 @@ class Workbench:
             )
         return response
 
+    def remove_uploaded_content(self, filename: str, scan_code: str):
+        """
+        When using chunked uploading every new chunk is appended to existing file, for this reason we need to make sure
+        that initially there is no file (from previous uploading).
+
+        Args:
+            filename (str): The file to be deleted
+            scan_code (str): The unique identifier for the scan.
+        """
+        print("Called scans->remove_uploaded_content on file {}".format(filename))
+        payload = {
+            "group": "scans",
+            "action": "remove_uploaded_content",
+            "data": {
+                "username": self.api_user,
+                "key": self.api_token,
+                "scan_code": scan_code,
+                "filename": filename,
+            },
+        }
+        resp = self._send_request(payload)
+        if resp["status"] != "1":
+            print(
+                f"Cannot delete file {filename}, maybe is the first time when uploading this file? API response {resp}."
+            )
+
 
 class CliWrapper:
     """
@@ -1016,6 +1091,14 @@ def parse_cmdline_args():
         type=str,
         required=False,
     )
+    optional.add_argument(
+        "--enable_chunk_upload",
+        help="For files bigger than 8 MB (which is default post_max_size in php.ini) uploading will be done using\n"
+             "the header Transfer-encoding: chunked with chunks of 5120 bytes. By default, enabled.",
+        action="store_true",
+        default=True,
+        required=False,
+    )
     required.add_argument(
         "--scan_number_of_tries",
         help="""Number of calls to 'check_status' till declaring the scan failed from the point of view of the agent""",
@@ -1195,7 +1278,7 @@ def main():
         workbench.create_webapp_scan(params.scan_code, params.project_code, params.target_path)
     else:
         print(
-            f"Scan with code {params.scan_code} already exists. Proceeding to uploading hashes..."
+            f"Scan with code {params.scan_code} already exists. Proceeding to upload..."
         )
     # Handle blind scan differently from regular scan
     if params.blind_scan:
@@ -1234,7 +1317,7 @@ def main():
                     if not os.path.isdir(os.path.join(root, filename)):
                         counter_files = counter_files + 1
                         workbench.upload_files(
-                            params.scan_code, os.path.join(root, filename)
+                            params.scan_code, os.path.join(root, filename), params.enable_chunk_upload
                         )
             print("A total of {} files uploaded".format(counter_files))
         print("Calling API scans->extracting_archives")
