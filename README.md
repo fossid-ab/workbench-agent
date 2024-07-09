@@ -120,7 +120,7 @@ usage: workbench-agent.py [-h] --api_url API_URL --api_user API_USER
                           [--delta_only] [--reuse_identifications]
                           [--identification_reuse_type {any,only_me,specific_project,specific_scan}]
                           [--specific_code SPECIFIC_CODE]
-                          [--enable_chunk_upload]
+                          [--chunked_upload]
                           [--scan_number_of_tries SCAN_NUMBER_OF_TRIES]
                           [--scan_wait_time SCAN_WAIT_TIME] --path PATH
                           [--log LOG] [--path-result PATH_RESULT]
@@ -181,9 +181,8 @@ optional arguments:
   --target_path TARGET_PATH
                         The path on the Workbench server where the code to be scanned is stored.
                         No upload is done in this scenario.
-  --enable_chunk_upload
-                        For files bigger than 8 MB (which is default post_max_size in php.ini) uploading will be done using
-                        the header Transfer-encoding: chunked with chunks of 5120 bytes. By default, enabled.
+  --chunked_upload      For files bigger than 8 MB (which is default post_max_size in php.ini) uploading will be done using
+                        the header Transfer-encoding: chunked with chunks of 5MB.
   --log LOG             specify logging level. Allowed values: DEBUG, INFO, WARNING, ERROR
   --path-result PATH_RESULT
                         Save results to specified path
