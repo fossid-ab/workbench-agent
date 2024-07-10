@@ -120,6 +120,8 @@ usage: workbench-agent.py [-h] --api_url API_URL --api_user API_USER
                           [--delta_only] [--reuse_identifications]
                           [--identification_reuse_type {any,only_me,specific_project,specific_scan}]
                           [--specific_code SPECIFIC_CODE]
+                          [--no_advanced_match_scoring]
+                          [--match_filtering_threshold MATCH_FILTERING_THRESHOLD]
                           [--chunked_upload]
                           [--scan_number_of_tries SCAN_NUMBER_OF_TRIES]
                           [--scan_wait_time SCAN_WAIT_TIME] --path PATH
@@ -178,6 +180,11 @@ optional arguments:
   --specific_code SPECIFIC_CODE
                         The scan code used when creating the scan in Workbench. It can be based on some env var,
                         for example:  ${BUILD_NUMBER}
+  --no_advanced_match_scoring
+                        Disable advanced match scoring which by default is enabled.
+  --match_filtering_threshold MATCH_FILTERING_THRESHOLD
+                        Minimum length, in characters, of the snippet to be considered valid after applying intelligent match
+                        Set to 0 to disable intelligent match filtering for current scan.
   --target_path TARGET_PATH
                         The path on the Workbench server where the code to be scanned is stored.
                         No upload is done in this scenario.
