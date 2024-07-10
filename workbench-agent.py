@@ -796,6 +796,8 @@ class Workbench:
         reuse_identification: bool,
         identification_reuse_type: str = None,
         specific_code: str = None,
+        advanced_match_scoring: bool = True,
+        match_filtering_threshold: int = -1
     ):
         """
 
@@ -810,7 +812,9 @@ class Workbench:
             reuse_identification (bool):                    Reuse previous identifications
             identification_reuse_type (str):                Possible values: any,only_me,specific_project,specific_scan
             specific_code (str):                            Fill only when reuse type: specific_project or specific_scan
-
+            advanced_match_scoring (bool):                  If true, scan will run with advanced match scoring.
+            match_filtering_threshold (int):                Minimum length (in characters) of snippet to be considered
+                                                            valid after applying intelligent match filtering.
         Returns:
 
         """
@@ -843,8 +847,11 @@ class Workbench:
                     auto_identification_resolve_pending_ids
                 ),
                 "delta_only": int(delta_only),
+                "advanced_match_scoring": int(advanced_match_scoring),
             },
         }
+        if match_filtering_threshold > -1:
+            payload["data"]['match_filtering_threshold'] = match_filtering_threshold
         if reuse_identification:
             data = payload["data"]
             data["reuse_identification"] = "1"
@@ -1151,7 +1158,19 @@ def parse_cmdline_args():
         type=str,
         required=False,
     )
-
+    optional.add_argument(
+        '--no_advanced_match_scoring',
+        help='Disable advanced match scoring which by default is enabled.',
+        dest='advanced_match_scoring',
+        action='store_false',
+    )
+    optional.add_argument(
+        "--match_filtering_threshold",
+        help="Minimum length, in characters, of the snippet to be considered valid after applying match filtering.\n"
+            "Set to 0 to disable intelligent match filtering for current scan.",
+        type=int,
+        default=-1,
+    )
     optional.add_argument(
         "--target_path",
         help="The path on the Workbench server where the code to be scanned is stored.\n"
@@ -1420,6 +1439,8 @@ def main():
             params.reuse_identifications,
             params.identification_reuse_type,
             params.specific_code,
+            params.advanced_match_scoring,
+            params.match_filtering_threshold
          )
         # Check if finished based on: scan_number_of_tries X scan_wait_time until throwing an error
         workbench.wait_for_scan_to_finish(

@@ -6,7 +6,8 @@ disable=consider-using-f-string,
     broad-exception-caught,
     unspecified-encoding,
     logging-fstring-interpolation,
-    logging-format-interpolation
+    logging-format-interpolation,
+    too-many-arguments
 
 # Specify a configuration file.
 #rcfile=
