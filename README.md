@@ -155,7 +155,7 @@ optional arguments:
   --sensitivity SENSITIVITY
                         Sets snippet sensitivity to a minimum of N lines (default: 10)
   --recursively_extract_archives
-                        Recursively extract nested archives. Default true.
+                        Recursively extract nested archives. Default false.
   --jar_file_extraction
                         Control default behavior related to extracting jar files. Default false.
   --blind_scan          Call CLI and generate file hashes. Upload hashes and initiate blind scan.
