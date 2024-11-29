@@ -4,12 +4,12 @@ jobs:
   code_linting:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
       - name: Code linters
         run: |
           pip install -r requirements.txt
+          echo "Running pycodestyle"
+          pycodestyle --help
           pycodestyle workbench-agent.py
+          echo "Running pylint"
           pylint --errors-only --rcfile .pylintrc workbench-agent.py
-          
-          
-
