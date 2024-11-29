@@ -1080,9 +1080,9 @@ def parse_cmdline_args():
     )
     optional.add_argument(
         "--recursively_extract_archives",
-        help="Recursively extract nested archives. Default true.",
+        help="Recursively extract nested archives. Default false.",
         action="store_true",
-        default=True,
+        default=False,
     )
     optional.add_argument(
         "--jar_file_extraction",
