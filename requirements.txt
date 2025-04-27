@@ -1,5 +1,0 @@
-requests
-python-dotenv
-pycodestyle
-pylint
-black

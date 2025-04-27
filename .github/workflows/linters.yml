@@ -1,15 +1,38 @@
+# .github/workflows/linters.yml
 name: lint
-on: [push, pull_request]
+
+# Run on pushes and pull requests targeting the main branches
+on:
+  push:
+    branches: [ main, develop ] # Adjust branch names if needed
+  pull_request:
+    branches: [ main, develop ]
+
 jobs:
   code_linting:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v1
-      - name: Code linters
-        run: |
-          pip install -r requirements.txt
-          pycodestyle workbench-agent.py
-          pylint --errors-only --rcfile .pylintrc workbench-agent.py
-          
-          
+      # 1. Check out the repository code
+      - name: Checkout code
+        uses: actions/checkout@v4 # Use a recent version
 
+      # 2. Set up Python (only need one version for linting)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # Use a single recent version
+
+      # 3. Install Linters
+      - name: Install Linters
+        run: |
+          python -m pip install --upgrade pip
+          # Install linters directly, no need for requirements.txt or installing the project
+          pip install pycodestyle pylint
+
+      # 4. Run Linters on the source code directory
+      - name: Run Linters
+        run: |
+          # Lint the package source directory inside 'src'
+          pycodestyle src/workbench_agent/
+          # Assuming .pylintrc exists and is configured correctly for the new structure
+          pylint --errors-only --rcfile .pylintrc src/workbench_agent/
