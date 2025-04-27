@@ -1,5 +1,3 @@
-# workbench_agent/api.py
-
 import requests
 import json
 import base64
@@ -10,7 +8,7 @@ import logging
 import io
 import shutil
 import tempfile
-import builtins # Still needed as exceptions weren't refactored yet
+import builtins
 from typing import Generator, Optional, Dict, Any, List, Union, Tuple
 
 # Assume logger is configured in main.py
@@ -20,7 +18,7 @@ class Workbench:
     """
     A class to interact with the FossID Workbench API.
     """
-    # --- Report Types (Keep as class constants) ---
+    # --- Report Types ---
     ASYNC_REPORT_TYPES = {"xlsx", "spdx", "spdx_lite", "cyclone_dx", "basic"}
     PROJECT_REPORT_TYPES = {"xlsx", "spdx", "spdx_lite", "cyclone_dx"}
     SCAN_REPORT_TYPES = {"html", "dynamic_top_matched_components", "xlsx", "spdx", "spdx_lite", "cyclone_dx", "string_match"}
@@ -73,7 +71,6 @@ class Workbench:
                         error_msg = parsed_json.get("error", "Unknown API error")
                         logger.debug(f"API returned status 0 JSON: {error_msg} | Payload: {payload}")
 
-                        # --- MODIFIED: Add check for specific 'invalid type' error during check_status ---
                         is_invalid_type_probe = False
                         if (payload.get("action") == "check_status" and
                             error_msg == "RequestData.Base.issues_while_parsing_request" and
@@ -84,7 +81,6 @@ class Workbench:
                             parsed_json["data"][0].get("message_parameters", {}).get("fieldname") == "type"):
                             is_invalid_type_probe = True
                             logger.debug("Detected 'invalid type option' error during check_status probe.")
-                        # --- END MODIFICATION ---
 
                         # Determine if this error is expected and non-fatal
                         is_existence_check = payload.get("action") == "get_information"
@@ -94,11 +90,10 @@ class Workbench:
                         project_already_exists = (is_create_action and payload.get("group") == "projects" and "Project code already exists" in error_msg)
                         scan_already_exists = (is_create_action and payload.get("group") == "scans" and ("Scan code already exists" in error_msg or "Legacy.controller.scans.code_already_exists" in error_msg))
 
-                        # --- MODIFIED: Include is_invalid_type_probe in non-fatal check ---
+                        # --- Include is_invalid_type_probe in non-fatal check ---
                         if not (project_not_found or scan_not_found or project_already_exists or scan_already_exists or is_invalid_type_probe):
                              logger.error(f"Unhandled API Error (status 0 JSON): {error_msg} | Payload: {payload}")
                              raise builtins.Exception(f"API returned error: {error_msg}")
-                        # --- END MODIFICATION ---
                         # Return the status 0 JSON for expected non-fatal errors
 
                     return parsed_json # Return successfully parsed JSON (status 1 or expected status 0)
@@ -152,7 +147,7 @@ class Workbench:
                 logger.debug(f"check_status for type '{process_type}' appears to be supported (API status 1).")
                 return True
 
-            # --- MODIFIED: Check for specific 'invalid type' error structure ---
+            # --- Check for specific 'invalid type' error structure ---
             elif response.get("status") == "0":
                 error_code = response.get("error")
                 data_list = response.get("data")
@@ -177,7 +172,6 @@ class Workbench:
                     # It's a different status 0 error (e.g., scan not found), raise it.
                     logger.error(f"API error during {process_type} support check (but not an invalid type error): {error_code} - {response.get('message')}")
                     raise builtins.Exception(f"API error during {process_type} support check: {error_code} - {response.get('message', 'No details')}")
-            # --- END MODIFICATION ---
 
             else:
                 # Unexpected response format (neither status 1 nor 0)
@@ -247,7 +241,6 @@ class Workbench:
                 print(f"{process_description} completed successfully (Status: {current_status}).")
                 return True # Indicate success
 
-            # --- MODIFIED FAILURE HANDLING ---
             # Check for Failure
             if current_status in failure_values:
                 print() # Newline after potential dots
@@ -286,7 +279,6 @@ class Workbench:
 
                 # Raise the exception with the constructed, more informative message
                 raise builtins.Exception(base_error_msg)
-            # --- END MODIFIED FAILURE HANDLING ---
 
             # Still running or in an intermediate state
             # Only print if status changed or it's the first/last few attempts for less noise
@@ -533,12 +525,12 @@ class Workbench:
             progress_indicator=True
         )
 
-    def get_pending_files(self, scan_code: str) -> Dict[str, str]: # Update return type hint
+    def get_pending_files(self, scan_code: str) -> Dict[str, str]:
         """Retrieves pending files for a scan."""
         logger.debug(f"Fetching files with Pending IDs for scan '{scan_code}'...")
         payload = {
-            "group": "scans", # Use constants if implemented
-            "action": "get_pending_files", # Use constants if implemented
+            "group": "scans", 
+            "action": "get_pending_files", 
             "data": {"scan_code": scan_code}
         }
         response = self._send_request(payload)
@@ -582,7 +574,7 @@ class Workbench:
         logger.debug(f"Fetching policy warnings info for scan '{scan_code}'...")
         payload = {
             "group": "scans",
-            "action": "get_policy_warnings_info", # Correct API action
+            "action": "get_policy_warnings_info",
             "data": {"scan_code": scan_code}
         }
         response = self._send_request(payload)
@@ -665,7 +657,6 @@ class Workbench:
         }
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
-            # API returns a list [ {details} ]
             data = response["data"]
             return data if isinstance(data, list) else []
         elif response.get("status") == "1": # Success but no data key
@@ -920,8 +911,8 @@ class Workbench:
                  payload_data["git_ref_type"] = "branch"
 
         payload = {
-            "group": "scans", # Use constants if implemented
-            "action": "create", # Use constants if implemented
+            "group": "scans", 
+            "action": "create",
             "data": payload_data,
         }
 
@@ -1060,7 +1051,6 @@ class Workbench:
         else: # scan scope
             use_async = report_type in self.ASYNC_REPORT_TYPES
             # No need to validate scan report types here, API will handle it
-        # --- End Force Async ---
 
         async_value = "1" if use_async else "0" # Will always be "1" for project scope
 
@@ -1105,9 +1095,9 @@ class Workbench:
 
         response_data = self._send_request(payload)
 
-        # --- Adjust Response Handling ---
+        # --- Response Handling ---
         if "_raw_response" in response_data:
-            # This block should now ONLY be reached for SYNCHRONOUS SCAN reports
+            # This block should ONLY be reached for SYNCHRONOUS SCAN reports
             if is_project_scope:
                  # This is unexpected based on the requirement that project reports are always async
                  logger.error(f"API returned a synchronous response for a project report ({report_type}), which was not expected. Cannot proceed.")
@@ -1127,11 +1117,10 @@ class Workbench:
             # Handle API errors (status 0 or unexpected format)
             error_msg = response_data.get("error", f"Unexpected response: {response_data}")
             raise builtins.Exception(f"Failed to request report generation for {entity_name}: {error_msg}")
-        # --- End Adjust Response Handling ---
 
     def check_report_generation_status(
         self,
-        scope: str, # ADD scope
+        scope: str, 
         process_id: int,
         scan_code: Optional[str] = None, # Keep for scan scope context if needed by API later
         project_code: Optional[str] = None # Keep for project scope context if needed by API later
@@ -1141,17 +1130,17 @@ class Workbench:
         if scope not in ["scan", "project"]:
             raise ValueError("Invalid scope provided to check_report_generation_status.")
 
-        group = "projects" if scope == "project" else "scans" # Use constants if implemented
+        group = "projects" if scope == "project" else "scans"
         entity_name = f"project '{project_code}'" if scope == "project" else f"scan '{scan_code}'"
         logger.debug(f"Checking report generation status for process {process_id} ({scope} scope)...")
 
         payload = {
             "group": group,
-            "action": "check_status", # Use constants if implemented
+            "action": "check_status",
             "data": {
                 # API schema only shows process_id and type needed
                 "process_id": str(process_id),
-                "type": "REPORT_GENERATION", # Use constants if implemented
+                "type": "REPORT_GENERATION",
                 # Add scan_code/project_code if API requires them for context, e.g.:
                 # **({ "scan_code": scan_code } if scope == "scan" else {}),
                 # **({ "project_code": project_code } if scope == "project" else {}),
