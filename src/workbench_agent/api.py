@@ -1,30 +1,28 @@
-import requests
-import json
-import base64
-import time
-import re
 import os
+import json
+import time
 import logging
-import io
-import shutil
+import requests
+import zipfile
 import tempfile
-from typing import Generator, Optional, Dict, Any, List, Union, Tuple
-
+import shutil
+import io
+from typing import Dict, List, Optional, Union, Any, Callable, Generator, Tuple
 from .exceptions import (
+    WorkbenchAgentError,
     ApiError,
     NetworkError,
+    ConfigurationError,
     AuthenticationError,
-    NotFoundError,
-    ProjectNotFoundError,
-    ScanNotFoundError,
-    ResourceExistsError,
-    ProjectExistsError,
-    ScanExistsError,
     ProcessError,
     ProcessTimeoutError,
     FileSystemError,
     ValidationError,
-    CompatibilityError
+    CompatibilityError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError
 )
 
 # Assume logger is configured in main.py

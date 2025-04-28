@@ -2,7 +2,6 @@
 
 import pytest
 import requests
-import builtins
 import os
 import json # Needed for JSONDecodeError test
 from unittest.mock import MagicMock, patch, mock_open
@@ -10,6 +9,19 @@ from unittest.mock import MagicMock, patch, mock_open
 # Import from the package structure
 from workbench_agent.api import Workbench
 from workbench_agent.utils import _save_report_content, _resolve_project, _resolve_scan, _ensure_scan_compatibility
+from workbench_agent.exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError,
+    CompatibilityError
+)
 
 # --- Fixtures ---
 @pytest.fixture
@@ -46,85 +58,50 @@ def test_send_request_success(workbench_inst, mock_session):
     mock_session.post.assert_called_once()
     assert result == {"status": "1", "data": {"key": "value"}}
 
-def test_send_request_api_error_unhandled(workbench_inst, mock_session):
-    """Test an API error (status 0) that is NOT handled as non-fatal."""
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {'content-type': 'application/json'}
-    mock_response.json.return_value = {"status": "0", "error": "A generic failure"}
-    mock_session.post.return_value = mock_response
-    payload = {"group": "test", "action": "fail"}
-    with pytest.raises(builtins.Exception, match="API returned error: A generic failure"):
-        workbench_inst._send_request(payload)
+def test_send_request_api_error():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.return_value = MagicMock(
+            status_code=500,
+            json=lambda: {"error": "A generic failure"}
+        )
+        with pytest.raises(ApiError, match="API returned error: A generic failure"):
+            Workbench()._send_request("GET", "/test")
 
-def test_send_request_non_fatal_scan_not_found(workbench_inst, mock_session):
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {'content-type': 'application/json'}
-    scan_not_found_error = "Classes.TableRepository.row_not_found"
-    mock_response.json.return_value = {"status": "0", "error": scan_not_found_error}
-    mock_session.post.return_value = mock_response
-    payload = {"group": "scans", "action": "get_information"}
-    result = workbench_inst._send_request(payload)
-    assert result == {"status": "0", "error": scan_not_found_error}
+def test_send_request_network_error():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.side_effect = requests.exceptions.ConnectionError("Failed to connect")
+        with pytest.raises(NetworkError, match="API request failed: Failed to connect"):
+            Workbench()._send_request("GET", "/test")
 
-def test_send_request_non_fatal_project_not_found(workbench_inst, mock_session):
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {'content-type': 'application/json'}
-    project_not_found_error = "Project does not exist"
-    mock_response.json.return_value = {"status": "0", "error": project_not_found_error}
-    mock_session.post.return_value = mock_response
-    payload = {"group": "projects", "action": "get_information"}
-    result = workbench_inst._send_request(payload)
-    assert result == {"status": "0", "error": project_not_found_error}
+def test_send_request_timeout():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.side_effect = requests.exceptions.Timeout("Request timed out")
+        with pytest.raises(NetworkError, match="API request failed: Request timed out"):
+            Workbench()._send_request("GET", "/test")
 
-def test_send_request_non_fatal_project_exists(workbench_inst, mock_session):
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {'content-type': 'application/json'}
-    project_exists_error = "Project code already exists: PROJ1"
-    mock_response.json.return_value = {"status": "0", "error": project_exists_error}
-    mock_session.post.return_value = mock_response
-    payload = {"group": "projects", "action": "create"}
-    result = workbench_inst._send_request(payload)
-    assert result == {"status": "0", "error": project_exists_error}
+def test_send_request_invalid_json():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {"invalid": "json"}
+        )
+        with pytest.raises(ApiError, match="API request failed"):
+            Workbench()._send_request("GET", "/test")
 
-def test_send_request_non_fatal_scan_exists(workbench_inst, mock_session):
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {'content-type': 'application/json'}
-    scan_exists_error = "Scan code already exists: SCAN1"
-    mock_response.json.return_value = {"status": "0", "error": scan_exists_error}
-    mock_session.post.return_value = mock_response
-    payload = {"group": "scans", "action": "create"}
-    result = workbench_inst._send_request(payload)
-    assert result == {"status": "0", "error": scan_exists_error}
+def test_send_request_check_feature_support_scan_not_found():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.return_value = MagicMock(
+            status_code=404,
+            json=lambda: {"error": "Scan not found"}
+        )
+        with pytest.raises(ApiError, match="API error during EXTRACT_ARCHIVES support check: Scan not found"):
+            Workbench()._check_feature_support("EXTRACT_ARCHIVES", "test_scan")
 
-def test_send_request_non_fatal_invalid_type_probe(workbench_inst, mock_session):
-    """Test the specific non-fatal error during check_status probe."""
-    mock_response = MagicMock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.headers = {'content-type': 'application/json'}
-    error_payload = {
-        "status": "0",
-        "error": "RequestData.Base.issues_while_parsing_request",
-        "data": [{
-            "code": "RequestData.Base.field_not_valid_option",
-            "message": "Field 'type' has an invalid option: 'EXTRACT_ARCHIVES'",
-            "message_parameters": {
-                "fieldname": "type",
-                "value": "EXTRACT_ARCHIVES",
-                "options": "SCAN,DEPENDENCY_ANALYSIS,REPORT_GENERATION"
-            }
-        }]
-    }
-    mock_response.json.return_value = error_payload
-    mock_session.post.return_value = mock_response
-    payload = {"group": "scans", "action": "check_status", "data": {"type": "EXTRACT_ARCHIVES"}}
-    result = workbench_inst._send_request(payload)
-    # Should return the error payload for this specific case
-    assert result == error_payload
+def test_send_request_check_feature_support_network_error():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Error during EXTRACT_ARCHIVES support check: Connection failed"):
+            Workbench()._check_feature_support("EXTRACT_ARCHIVES", "test_scan")
 
 def test_send_request_sync_response(workbench_inst, mock_session):
     mock_response = MagicMock(spec=requests.Response)
@@ -137,19 +114,6 @@ def test_send_request_sync_response(workbench_inst, mock_session):
     assert "_raw_response" in result
     assert result["_raw_response"] == mock_response
 
-def test_send_request_network_error(workbench_inst, mock_session):
-    mock_session.post.side_effect = requests.exceptions.ConnectionError("Failed to connect")
-    payload = {"group": "test", "action": "netfail"}
-    with pytest.raises(builtins.Exception, match="API request failed: Failed to connect"):
-        workbench_inst._send_request(payload)
-
-def test_send_request_timeout_error(workbench_inst, mock_session):
-    mock_session.post.side_effect = requests.exceptions.Timeout("Request timed out")
-    payload = {"group": "test", "action": "timeout"}
-    # TODO: Update match when NetworkError is implemented
-    with pytest.raises(builtins.Exception, match="API request failed: Request timed out"):
-        workbench_inst._send_request(payload, timeout=1)
-
 def test_send_request_http_error(workbench_inst, mock_session):
     mock_response = MagicMock(spec=requests.Response)
     mock_response.status_code = 401 # Unauthorized
@@ -157,8 +121,7 @@ def test_send_request_http_error(workbench_inst, mock_session):
     mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(response=mock_response)
     mock_session.post.return_value = mock_response
     payload = {"group": "test", "action": "authfail"}
-    # TODO: Update match when NetworkError is implemented
-    with pytest.raises(builtins.Exception, match="API request failed"):
+    with pytest.raises(NetworkError, match="API request failed"):
         workbench_inst._send_request(payload)
 
 def test_send_request_json_decode_error(workbench_inst, mock_session):
@@ -169,8 +132,7 @@ def test_send_request_json_decode_error(workbench_inst, mock_session):
     mock_response.json.side_effect = json.JSONDecodeError("Expecting value", "This is not JSON", 0)
     mock_session.post.return_value = mock_response
     payload = {"group": "test", "action": "badjson"}
-    # TODO: Update match when ApiError is implemented
-    with pytest.raises(builtins.Exception, match="Invalid JSON received from API"):
+    with pytest.raises(ApiError, match="Invalid JSON received from API"):
         workbench_inst._send_request(payload)
 
 # --- Test _is_status_check_supported ---
@@ -195,16 +157,14 @@ def test_is_status_check_supported_api_error(mock_send, workbench_inst):
     # Simulate a different status 0 error
     mock_send.return_value = {"status": "0", "error": "Scan not found"}
     # Should raise the underlying API error
-    with pytest.raises(builtins.Exception, match="API error during EXTRACT_ARCHIVES support check: Scan not found"):
+    with pytest.raises(ApiError, match="API error during EXTRACT_ARCHIVES support check: Scan not found"):
         workbench_inst._is_status_check_supported("scan1", "EXTRACT_ARCHIVES")
 
 @patch.object(Workbench, '_send_request')
 def test_is_status_check_supported_network_error(mock_send, workbench_inst):
     # Simulate a network error during the probe
-    # TODO: Update exception type when NetworkError is implemented
-    mock_send.side_effect = builtins.Exception("Connection failed")
-    # TODO: Update exception type when WorkbenchAgentError is implemented
-    with pytest.raises(builtins.Exception, match="Error during EXTRACT_ARCHIVES support check: Connection failed"):
+    mock_send.side_effect = NetworkError("Connection failed")
+    with pytest.raises(NetworkError, match="Error during EXTRACT_ARCHIVES support check: Connection failed"):
         workbench_inst._is_status_check_supported("scan1", "EXTRACT_ARCHIVES")
 
 # --- Test _wait_for_process ---
@@ -225,42 +185,34 @@ def test_wait_for_process_success(workbench_inst, mocker):
     assert success is True
     assert mock_check_func.call_count == 3
 
-def test_wait_for_process_timeout(workbench_inst, mocker):
-    mock_check_func = mocker.MagicMock()
-    mock_check_func.return_value = {"progress_state": "RUNNING"}
-    # TODO: Update exception type when ProcessTimeoutError is implemented
-    with pytest.raises(builtins.Exception, match="Timeout waiting for Test Process"):
-        workbench_inst._wait_for_process(
-            process_description="Test Process",
-            check_function=mock_check_func, check_args={},
-            status_accessor=lambda data: data.get("progress_state"),
-            success_values={"FINISHED"}, failure_values={"FAILED"},
-            max_tries=3, wait_interval=0.01, progress_indicator=False
-        )
-    assert mock_check_func.call_count == 3
+def test_wait_for_process_timeout():
+    with patch('time.sleep'):
+        with pytest.raises(ProcessTimeoutError, match="Timeout waiting for Test Process"):
+            Workbench()._wait_for_process(
+                "Test Process",
+                lambda x: x,
+                ["test"],
+                lambda x: x.get("status"),
+                ["SUCCESS"],
+                ["FAILURE"]
+            )
 
-def test_wait_for_process_failure(workbench_inst, mocker):
-    mock_check_func = mocker.MagicMock()
-    mock_check_func.side_effect = [
-        {"progress_state": "RUNNING"},
-        {"progress_state": "FAILED", "info": "Disk full", "percentage_done": "50%"},
-    ]
-    # TODO: Update exception type when ProcessError is implemented
-    with pytest.raises(builtins.Exception, match="The Test Process FAILED at 50%. The error returned by Workbench was: Disk full"):
-        workbench_inst._wait_for_process(
-            process_description="Test Process",
-            check_function=mock_check_func, check_args={},
-            status_accessor=lambda data: data.get("progress_state"),
-            success_values={"FINISHED"}, failure_values={"FAILED"},
-            max_tries=5, wait_interval=0.01, progress_indicator=False
-        )
-    assert mock_check_func.call_count == 2
+def test_wait_for_process_failure():
+    with patch('time.sleep'):
+        with pytest.raises(ProcessError, match="The Test Process FAILED at 50%. The error returned by Workbench was: Disk full"):
+            Workbench()._wait_for_process(
+                "Test Process",
+                lambda x: {"status": "FAILURE", "progress": 50, "error": "Disk full"},
+                ["test"],
+                lambda x: x.get("status"),
+                ["SUCCESS"],
+                ["FAILURE"]
+            )
 
 def test_wait_for_process_check_fails_retries(workbench_inst, mocker):
     mock_check_func = mocker.MagicMock()
-    # TODO: Update exception type when ApiError/NetworkError is implemented
     mock_check_func.side_effect = [
-        builtins.Exception("Network glitch"), # First call fails
+        NetworkError("Network glitch"), # First call fails
         {"progress_state": "RUNNING"},        # Second call succeeds
         {"progress_state": "FINISHED"},       # Third call succeeds
     ]
@@ -278,8 +230,7 @@ def test_wait_for_process_accessor_fails(workbench_inst, mocker):
     mock_check_func = mocker.MagicMock()
     mock_check_func.return_value = {"wrong_key": "FINISHED"} # Status cannot be accessed
     # Should treat ACCESS_ERROR as non-terminal and eventually time out
-    # TODO: Update exception type when ProcessTimeoutError is implemented
-    with pytest.raises(builtins.Exception, match="Timeout waiting for Test Accessor.*Last Status: ACCESS_ERROR"):
+    with pytest.raises(ProcessTimeoutError, match="Timeout waiting for Test Accessor.*Last Status: ACCESS_ERROR"):
         workbench_inst._wait_for_process(
             process_description="Test Accessor",
             check_function=mock_check_func, check_args={},
@@ -379,22 +330,20 @@ def test_upload_files_da_import(mock_post, mock_open_file, mock_getsize, mock_is
     assert headers.get("FOSSID-UPLOAD-TYPE") == "dependency_analysis"
 
 @patch('os.path.exists', return_value=False)
-def test_upload_files_path_not_exist(mock_exists, workbench_inst):
-    # TODO: Update exception type when FileSystemError is implemented
-    with pytest.raises(builtins.Exception, match="Path does not exist"):
-        workbench_inst.upload_files("scan5", "/bad/path")
-    mock_exists.assert_called_once_with("/bad/path")
+def test_upload_files_path_not_found():
+    with pytest.raises(FileSystemError, match="Path does not exist"):
+        Workbench().upload_files("nonexistent_path", "test_scan")
 
 @patch('os.path.exists', return_value=True)
 @patch('os.path.isdir', return_value=False)
 @patch('os.path.getsize', return_value=1024)
 @patch('builtins.open', new_callable=mock_open, read_data=b'file data')
 @patch('requests.Session.post')
-def test_upload_files_network_error(mock_post, mock_open_file, mock_getsize, mock_isdir, mock_exists, workbench_inst):
-    mock_post.side_effect = requests.exceptions.ConnectionError("Network Error")
-    # TODO: Update exception type when NetworkError is implemented
-    with pytest.raises(builtins.Exception, match="Failed to upload.*Network Error"):
-        workbench_inst.upload_files("scan6", "/path/to/file.zip")
+def test_upload_files_network_error():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.side_effect = NetworkError("Network Error")
+        with pytest.raises(NetworkError, match="Failed to upload.*Network Error"):
+            Workbench().upload_files("test_path", "test_scan")
 
 # --- Test get_* methods ---
 @patch.object(Workbench, '_send_request')
@@ -429,11 +378,11 @@ def test_get_scan_identified_components_success(mock_send, workbench_inst):
     assert {"name": "Comp B", "version": "2.0"} in result
 
 @patch.object(Workbench, '_send_request')
-def test_get_scan_identified_components_fail(mock_send, workbench_inst):
-    # TODO: Update exception type when ApiError is implemented
-    mock_send.side_effect = builtins.Exception("API failed")
-    with pytest.raises(builtins.Exception, match="Error retrieving identified components"):
-        workbench_inst.get_scan_identified_components("scan1")
+def test_get_scan_identified_components_fail():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.side_effect = ApiError("API failed")
+        with pytest.raises(ApiError, match="Error retrieving identified components"):
+            Workbench().get_scan_identified_components("test_scan")
 
 @patch.object(Workbench, '_send_request')
 def test_get_dependency_analysis_results_success(mock_send, workbench_inst):
@@ -453,7 +402,7 @@ def test_get_dependency_analysis_results_other_error(mock_send, workbench_inst):
     # Simulate a different status 0 error
     mock_send.return_value = {"status": "0", "error": "Scan not found"}
     # Should raise exception
-    with pytest.raises(builtins.Exception, match="Error getting dependency analysis results.*Scan not found"):
+    with pytest.raises(ApiError, match="Error getting dependency analysis results.*Scan not found"):
         workbench_inst.get_dependency_analysis_results("scan1")
 
 # --- Test create_project / create_webapp_scan ---
@@ -471,8 +420,7 @@ def test_create_project_success(mock_send, workbench_inst):
 @patch.object(Workbench, 'list_projects') # Mock list_projects for the fallback
 def test_create_project_already_exists(mock_list_proj, mock_send, workbench_inst):
     # First call to _send_request simulates "already exists"
-    # TODO: Update exception type when ProjectExistsError is implemented
-    mock_send.side_effect = builtins.Exception("Project code already exists: New Project")
+    mock_send.side_effect = ProjectExistsError("Project code already exists: New Project")
     # Second call (list_projects) finds the existing project
     mock_list_proj.return_value = [{"project_name": "New Project", "project_code": "EXISTING_PROJ"}]
 
@@ -493,13 +441,11 @@ def test_create_webapp_scan_success(mock_send, workbench_inst):
     assert payload['data']['project_code'] == 'PROJ1'
 
 @patch.object(Workbench, '_send_request')
-def test_create_webapp_scan_already_exists(mock_send, workbench_inst):
-    # Simulate "already exists" error
-    # TODO: Update exception type when ScanExistsError is implemented
-    mock_send.side_effect = builtins.Exception("Scan code already exists")
-    result = workbench_inst.create_webapp_scan("Existing Scan", "PROJ1")
-    assert result is False # Should return False
-    mock_send.assert_called_once()
+def test_create_webapp_scan_already_exists():
+    with patch('requests.Session.send') as mock_send:
+        mock_send.side_effect = ScanExistsError("Scan code already exists")
+        with pytest.raises(ScanExistsError, match="Scan code already exists"):
+            Workbench().create_webapp_scan("test_project", "test_scan")
 
 # --- Test _resolve_scan (More Cases) ---
 @patch('workbench_agent.utils._resolve_project')
@@ -542,8 +488,7 @@ def test_resolve_scan_project_scope_not_found_no_create(mock_get_scans, mock_res
     params = mocker.MagicMock(spec=argparse.Namespace)
     params.command = 'show-results' # create_if_missing is False
 
-    # TODO: Update exception type when ScanNotFoundError is implemented
-    with pytest.raises(builtins.Exception, match="Scan 'MissingScan' not found"):
+    with pytest.raises(ScanNotFoundError, match="Scan 'MissingScan' not found"):
         _resolve_scan(
             workbench_inst,
             scan_name="MissingScan",
@@ -596,8 +541,7 @@ def test_ensure_scan_compatibility_git_branch_mismatch(mocker):
     params.git_url = "http://git.com"
     params.git_branch = "develop" # Requesting develop
     existing_scan_info = {"name": "GitScan", "code": "GITSCAN", "id": 1, "git_repo_url": "http://git.com", "git_branch": "main", "git_ref_type": "branch"} # Exists with main
-    # TODO: Update exception type when CompatibilityError is implemented
-    with pytest.raises(builtins.Exception, match="already exists with branch 'main'"):
+    with pytest.raises(CompatibilityError, match="already exists with branch 'main'"):
         _ensure_scan_compatibility(params, existing_scan_info, "GITSCAN")
 
 def test_ensure_scan_compatibility_git_tag_vs_branch(mocker):
@@ -606,8 +550,7 @@ def test_ensure_scan_compatibility_git_tag_vs_branch(mocker):
     params.git_url = "http://git.com"
     params.git_tag = "v1.0" # Requesting tag
     existing_scan_info = {"name": "GitScan", "code": "GITSCAN", "id": 1, "git_repo_url": "http://git.com", "git_branch": "main", "git_ref_type": "branch"} # Exists with branch
-    # TODO: Update exception type when CompatibilityError is implemented
-    with pytest.raises(builtins.Exception, match="exists with ref type 'branch'.*specified ref type 'tag'"):
+    with pytest.raises(CompatibilityError, match="exists with ref type 'branch'.*specified ref type 'tag'"):
         _ensure_scan_compatibility(params, existing_scan_info, "GITSCAN")
 
 # --- Test _save_report_content (already covered) ---

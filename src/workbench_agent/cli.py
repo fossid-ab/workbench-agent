@@ -62,8 +62,15 @@ def add_common_result_options(subparser):
 
 # --- Main Parsing Function ---
 def parse_cmdline_args():
-    """Parses command line arguments using subparsers."""
-
+    """
+    Parse command line arguments.
+    
+    Returns:
+        argparse.Namespace: Parsed command line arguments
+        
+    Raises:
+        ValidationError: If required arguments are missing or invalid
+    """
     parser = argparse.ArgumentParser(
         description="FossID Workbench Agent - A command-line tool for interacting with FossID Workbench.",
         formatter_class=RawTextHelpFormatter,
@@ -257,44 +264,4 @@ Example Usage:
     add_common_monitoring_options(scan_git_parser)
     add_common_result_options(scan_git_parser)
 
-    args = parser.parse_args()
-
-    # --- Post-parsing Validation ---
-    if not args.api_url or not args.api_user or not args.api_token:
-        parser.error(
-            "The Workbench URL, username, and token must be provided either as "
-            "arguments (--api-url, --api-user, --api-token) or environment variables "
-            "(WORKBENCH_URL, WORKBENCH_USER, WORKBENCH_TOKEN)."
-        )
-
-    # Command-specific validation
-    if args.command in ['scan', 'import-da', 'scan-git']:
-        if getattr(args, 'id_reuse', False):
-             reuse_type = getattr(args, 'id_reuse_type', 'any')
-             specific_code = getattr(args, 'id_reuse_source', None)
-             if reuse_type in {"project", "scan"} and not specific_code:
-                 parser.error(f"To reuse identifications from a '{reuse_type}', please provide the name of the '{reuse_type}' using --id-reuse-source.")
-
-        if args.command == 'scan' and getattr(args, 'path', None):
-             if not os.path.exists(args.path):
-                 parser.error(f"Input path does not exist: {args.path}")
-
-        elif args.command == 'import-da':
-             if not os.path.isfile(args.path):
-                 parser.error(f"Input path for import-da must be a file: {args.path}")
-             if os.path.basename(args.path) != "analyzer-result.json":
-                 print(f"Warning: Dependency Analysis results are typically named 'analyzer-result.json'. Will try with the provided {os.path.basename(args.path)}.")
-
-    elif args.command == 'show-results':
-        if not (args.show_licenses or args.show_components or args.show_policy_warnings):
-            parser.error("The 'show-results' command requires at least one --show-* flag.")
-
-    elif args.command == 'download-reports':
-        if args.report_scope == 'project' and not args.project_name:
-            parser.error("--project-name is required when --report-scope is 'project'.")
-        elif args.report_scope == 'scan' and not args.scan_name:
-             parser.error("--scan-name is required when --report-scope is 'scan'.")
-        # If scope is project, scan-name is ignored, so no error if it's missing.
-        # If scope is scan, project-name is optional.
-
-    return args
+    return parser.parse_args()

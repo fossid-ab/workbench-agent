@@ -5,9 +5,8 @@ import sys
 import time
 import logging
 import argparse
-import re
 import requests
-from typing import Generator, Optional, Dict, Any, List, Union, Tuple
+from typing import Dict, List, Optional, Union, Any
 
 # Import necessary components from other modules in the package
 from .api import Workbench
@@ -16,7 +15,13 @@ from .utils import (
     _resolve_scan,
     _execute_standard_scan_flow,
     fetch_and_process_results,
-    _save_report_content
+    _save_report_content,
+    _ensure_scan_compatibility,
+    process_scan_results,
+    process_scan_logs,
+    process_dependency_analysis_results,
+    process_policy_violations,
+    process_gates_evaluation
 )
 from .exceptions import (
     WorkbenchAgentError,

@@ -4,7 +4,6 @@ import pytest
 from unittest.mock import MagicMock, patch, call
 import argparse
 import requests # For mocking generate_report response
-import builtins # For asserting builtins.Exception
 
 # Import handlers and dependencies to mock
 from workbench_agent import handlers
@@ -89,7 +88,7 @@ def test_handle_show_results_success(mock_fetch, mock_resolve_scan, mock_resolve
         mock_workbench, mock_params, "PROJ_A_CODE", "SCAN_1_CODE", 123
     )
 
-@patch('workbench_agent.handlers._resolve_project', side_effect=builtins.Exception("Proj Not Found"))
+@patch('workbench_agent.handlers._resolve_project', side_effect=ProjectNotFoundError("Proj Not Found"))
 @patch('workbench_agent.handlers._resolve_scan')
 @patch('workbench_agent.handlers.fetch_and_process_results')
 def test_handle_show_results_project_resolve_fails(mock_fetch, mock_resolve_scan, mock_resolve_proj, mock_workbench, mock_params):
@@ -99,7 +98,7 @@ def test_handle_show_results_project_resolve_fails(mock_fetch, mock_resolve_scan
     mock_params.show_licenses = True
 
     # Expect the exception from _resolve_project to propagate
-    with pytest.raises(builtins.Exception, match="Proj Not Found"):
+    with pytest.raises(ProjectNotFoundError, match="Proj Not Found"):
         handlers.handle_show_results(mock_workbench, mock_params)
 
     mock_resolve_proj.assert_called_once()
@@ -107,7 +106,7 @@ def test_handle_show_results_project_resolve_fails(mock_fetch, mock_resolve_scan
     mock_fetch.assert_not_called()
 
 @patch('workbench_agent.handlers._resolve_project')
-@patch('workbench_agent.handlers._resolve_scan', side_effect=builtins.Exception("Scan Not Found"))
+@patch('workbench_agent.handlers._resolve_scan', side_effect=ScanNotFoundError("Scan Not Found"))
 @patch('workbench_agent.handlers.fetch_and_process_results')
 def test_handle_show_results_scan_resolve_fails(mock_fetch, mock_resolve_scan, mock_resolve_proj, mock_workbench, mock_params):
     mock_params.command = 'show-results'
@@ -116,7 +115,7 @@ def test_handle_show_results_scan_resolve_fails(mock_fetch, mock_resolve_scan, m
     mock_params.show_licenses = True
     mock_resolve_proj.return_value = "PROJ_A_CODE"
 
-    with pytest.raises(builtins.Exception, match="Scan Not Found"):
+    with pytest.raises(ScanNotFoundError, match="Scan Not Found"):
         handlers.handle_show_results(mock_workbench, mock_params)
 
     mock_resolve_proj.assert_called_once()
@@ -204,7 +203,7 @@ def test_handle_evaluate_gates_fail_policy(mock_get_policy, mock_get_pending, mo
 @patch('workbench_agent.handlers._resolve_scan')
 @patch('workbench_agent.handlers.Workbench.generate_links')
 @patch('workbench_agent.handlers.Workbench.set_env_variable')
-@patch('workbench_agent.handlers.Workbench.wait_for_scan_to_finish', side_effect=builtins.Exception("Scan Timed Out"))
+@patch('workbench_agent.handlers.Workbench.wait_for_scan_to_finish', side_effect=ProcessTimeoutError("Scan Timed Out"))
 @patch('workbench_agent.handlers.Workbench.get_pending_files')
 @patch('workbench_agent.handlers.Workbench.get_policy_warnings_info')
 def test_handle_evaluate_gates_fail_scan_wait(mock_get_policy, mock_get_pending, mock_wait, mock_set_env, mock_gen_links, mock_resolve_scan, mock_resolve_proj, mock_workbench, mock_params):
@@ -270,14 +269,14 @@ def test_handle_scan_success_no_extract_wait(mock_sleep, mock_exec_flow, mock_wa
 
 @patch('workbench_agent.handlers._resolve_project')
 @patch('workbench_agent.handlers._resolve_scan')
-@patch('workbench_agent.handlers.Workbench.upload_files', side_effect=builtins.Exception("Upload Failed"))
+@patch('workbench_agent.handlers.Workbench.upload_files', side_effect=FileSystemError("Upload Failed"))
 # ... other mocks for functions after upload ...
 def test_handle_scan_upload_fails(mock_upload, mock_resolve_scan, mock_resolve_proj, mock_workbench, mock_params):
     mock_params.command = 'scan'; mock_params.project_name = "P"; mock_params.scan_name = "S"; mock_params.path = "/path"
     mock_resolve_proj.return_value = "PC"
     mock_resolve_scan.return_value = ("SC", 1)
 
-    with pytest.raises(builtins.Exception, match="Upload Failed"):
+    with pytest.raises(FileSystemError, match="Upload Failed"):
         handlers.handle_scan(mock_workbench, mock_params)
 
     mock_upload.assert_called_once()
@@ -345,8 +344,7 @@ def test_handle_download_reports_multiple_one_fails(mock_save, mock_download, mo
 
     # Simulate html (sync) succeeds, xlsx (async) wait fails
     mock_sync_response = MagicMock(spec=requests.Response)
-    # TODO: Update exception type when ProcessError is implemented
-    mock_wait.side_effect = builtins.Exception("Report generation failed")
+    mock_wait.side_effect = ProcessError("Report generation failed")
 
     mock_gen_report.side_effect = [
         mock_sync_response, # html succeeds
@@ -354,8 +352,7 @@ def test_handle_download_reports_multiple_one_fails(mock_save, mock_download, mo
     ]
 
     # Expect the handler to raise an exception because one report failed
-    # TODO: Update exception type when ProcessError is implemented
-    with pytest.raises(builtins.Exception, match="Failed to process one or more reports: xlsx"):
+    with pytest.raises(ProcessError, match="Failed to process one or more reports: xlsx"):
         handlers.handle_download_reports(mock_workbench, mock_params)
 
     # Assertions
@@ -442,3 +439,81 @@ def test_handle_scan_unexpected_error(mock_workbench, mock_params):
         
         with pytest.raises(WorkbenchAgentError):
             handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_validation_error():
+    with pytest.raises(ValidationError, match="Scan code cannot be empty"):
+        handle_scan("", "test_path")
+
+def test_handle_scan_network_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.create_webapp_scan.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Connection failed"):
+            handle_scan("test_scan", "test_path")
+
+def test_handle_scan_api_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.create_webapp_scan.side_effect = ApiError("API error")
+        with pytest.raises(ApiError, match="API error"):
+            handle_scan("test_scan", "test_path")
+
+def test_handle_scan_process_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.run_scan.side_effect = ProcessError("Process failed")
+        with pytest.raises(ProcessError, match="Process failed"):
+            handle_scan("test_scan", "test_path")
+
+def test_handle_scan_git_validation_error():
+    with pytest.raises(ValidationError, match="Scan code cannot be empty"):
+        handle_scan_git("", "test_repo", "main")
+
+def test_handle_scan_git_network_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.create_git_scan.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Connection failed"):
+            handle_scan_git("test_scan", "test_repo", "main")
+
+def test_handle_scan_git_api_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.create_git_scan.side_effect = ApiError("API error")
+        with pytest.raises(ApiError, match="API error"):
+            handle_scan_git("test_scan", "test_repo", "main")
+
+def test_handle_import_da_validation_error():
+    with pytest.raises(ValidationError, match="Scan code cannot be empty"):
+        handle_import_da("", "test_path")
+
+def test_handle_import_da_network_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.import_dependency_analysis.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Connection failed"):
+            handle_import_da("test_scan", "test_path")
+
+def test_handle_evaluate_gates_validation_error():
+    with pytest.raises(ValidationError, match="Scan code cannot be empty"):
+        handle_evaluate_gates("")
+
+def test_handle_evaluate_gates_network_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.evaluate_gates.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Connection failed"):
+            handle_evaluate_gates("test_scan")
+
+def test_handle_show_results_validation_error():
+    with pytest.raises(ValidationError, match="Scan code cannot be empty"):
+        handle_show_results("")
+
+def test_handle_show_results_network_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.get_scan_results.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Connection failed"):
+            handle_show_results("test_scan")
+
+def test_handle_download_reports_validation_error():
+    with pytest.raises(ValidationError, match="Scan code cannot be empty"):
+        handle_download_reports("", "test_path")
+
+def test_handle_download_reports_network_error():
+    with patch('workbench_agent.api.Workbench') as mock_workbench:
+        mock_workbench.return_value.download_reports.side_effect = NetworkError("Connection failed")
+        with pytest.raises(NetworkError, match="Connection failed"):
+            handle_download_reports("test_scan", "test_path")
