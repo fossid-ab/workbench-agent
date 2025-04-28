@@ -8,7 +8,6 @@ import logging
 import io
 import shutil
 import tempfile
-import builtins
 from typing import Generator, Optional, Dict, Any, List, Union, Tuple
 
 from .exceptions import (
@@ -24,7 +23,8 @@ from .exceptions import (
     ProcessError,
     ProcessTimeoutError,
     FileSystemError,
-    ValidationError
+    ValidationError,
+    CompatibilityError
 )
 
 # Assume logger is configured in main.py
@@ -158,7 +158,8 @@ class Workbench:
             True if the check_status call for the type seems supported, False otherwise.
 
         Raises:
-            Exception: If the check_status call fails for reasons other than a recognized unsupported type error.
+            ApiError: If the check_status call fails for reasons other than a recognized unsupported type error.
+            NetworkError: If there are network connectivity issues.
         """
         logger.debug(f"Probing check_status support for type '{process_type}' on scan '{scan_code}'...")
         payload = {
@@ -171,7 +172,6 @@ class Workbench:
         }
         try:
             # Short timeout is sufficient for the probe.
-            # _send_request is now modified to return the JSON for the specific invalid type error.
             response = self._send_request(payload, timeout=30)
 
             # If status is "1", the API understood the request type.
@@ -203,7 +203,7 @@ class Workbench:
                 else:
                     # It's a different status 0 error (e.g., scan not found), raise it.
                     logger.error(f"API error during {process_type} support check (but not an invalid type error): {error_code} - {response.get('message')}")
-                    raise builtins.Exception(f"API error during {process_type} support check: {error_code} - {response.get('message', 'No details')}")
+                    raise ApiError(f"API error during {process_type} support check: {error_code} - {response.get('message', 'No details')}", details=response)
 
             else:
                 # Unexpected response format (neither status 1 nor 0)
@@ -211,123 +211,127 @@ class Workbench:
                 # Assume not supported to be safe
                 return False
 
-        except builtins.Exception as e:
+        except requests.exceptions.RequestException as e:
             # This block now primarily catches network errors or unexpected exceptions from _send_request.
             # We add a fallback check on the exception message just in case _send_request's logic changes.
             error_msg_lower = str(e).lower()
             if "requestdata.base.field_not_valid_option" in error_msg_lower and "type" in error_msg_lower:
-                 logger.warning(
+                logger.warning(
                     f"Workbench likely does not support check_status for type '{process_type}'. "
                     f"Skipping status check. (Detected via exception: {e})"
-                 )
-                 return False
+                )
+                return False
             else:
                 # Different error (network, scan not found, etc.), re-raise it.
                 logger.error(f"Unexpected exception during {process_type} support check: {e}", exc_info=False)
-                raise # Re-raise the original exception
+                if isinstance(e, NetworkError):
+                    raise
+                raise ApiError(f"Unexpected error during {process_type} support check", details={"error": str(e)}) from e
 
     def _wait_for_process(
         self,
         process_description: str,
-        check_function: callable, # The function to call for status (e.g., self.get_scan_status)
-        check_args: Dict[str, Any], # Arguments for the check_function
-        status_accessor: callable, # Function to extract status string from check_function result (e.g., lambda r: r.get("status"))
-        success_values: set, # Set of uppercase strings indicating success (e.g., {"FINISHED"})
-        failure_values: set, # Set of uppercase strings indicating failure (e.g., {"FAILED", "CANCELLED"})
+        check_function: callable,
+        check_args: Dict[str, Any],
+        status_accessor: callable,
+        success_values: set,
+        failure_values: set,
         max_tries: int,
         wait_interval: int,
-        progress_indicator: bool = True # Option to show dots
+        progress_indicator: bool = True
     ):
         """
         Generic method to wait for a background process to complete by polling its status.
         Provides enhanced error reporting on failure.
+
+        Args:
+            process_description: Description of the process being waited for
+            check_function: Function to call for checking status
+            check_args: Arguments to pass to check_function
+            status_accessor: Function to extract status from check_function result
+            success_values: Set of status values indicating success
+            failure_values: Set of status values indicating failure
+            max_tries: Maximum number of attempts
+            wait_interval: Time to wait between attempts
+            progress_indicator: Whether to show progress dots
+
+        Raises:
+            ProcessTimeoutError: If the process times out
+            ProcessError: If the process fails
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
         """
         print(f"Waiting for {process_description}...")
-        last_status = "UNKNOWN" # Keep track of the last status printed
+        last_status = "UNKNOWN"
 
         for i in range(max_tries):
-            status_data = None # Initialize status_data for the current iteration
+            status_data = None
             try:
-                # Call the provided check function with its arguments
                 status_data = check_function(**check_args)
-                # Use the accessor to get the status string, handle potential errors during access
                 try:
                     current_status_raw = status_accessor(status_data)
-                    current_status = str(current_status_raw).upper() # Ensure string and uppercase
+                    current_status = str(current_status_raw).upper()
                 except Exception as access_err:
                     logger.warning(f"Error accessing status via accessor during {process_description} check: {access_err}. Response data: {status_data}")
-                    current_status = "ACCESS_ERROR" # Treat as a distinct state
+                    current_status = "ACCESS_ERROR"
 
             except Exception as e:
-                 # Error during the API call itself
-                 print() # Newline after potential dots
-                 print(f"Attempt {i+1}/{max_tries}: Error checking status for {process_description}: {e}")
-                 print(f"Retrying in {wait_interval} seconds...")
-                 logger.warning(f"Error checking status for {process_description}", exc_info=False)
-                 time.sleep(wait_interval)
-                 continue
+                print()
+                print(f"Attempt {i+1}/{max_tries}: Error checking status for {process_description}: {e}")
+                print(f"Retrying in {wait_interval} seconds...")
+                logger.warning(f"Error checking status for {process_description}", exc_info=False)
+                time.sleep(wait_interval)
+                continue
 
-            # Check for Success
             if current_status in success_values:
-                print() # Newline after potential dots
+                print()
                 print(f"{process_description} completed successfully (Status: {current_status}).")
-                return True # Indicate success
+                return True
 
-            # Check for Failure
             if current_status in failure_values:
-                print() # Newline after potential dots
-                base_error_msg = f"The {process_description} {current_status}" # Start building the message
+                print()
+                base_error_msg = f"The {process_description} {current_status}"
 
-                # Try to get more specific details if status_data is a dict (like the example)
                 if isinstance(status_data, dict):
                     percentage = status_data.get("percentage_done", "N/A")
                     current_f = status_data.get("current_file", "N/A")
                     total_f = status_data.get("total_files", "N/A")
-                    # Try 'info', then 'comment', as fallbacks for the Workbench message
                     wb_info = status_data.get("info", status_data.get("comment", None))
-                    current_filename = status_data.get("current_filename") # Get filename if available
+                    current_filename = status_data.get("current_filename")
 
-                    # Append details to the message
                     if percentage != "N/A":
                         base_error_msg += f" at {percentage}"
                     if current_f != "N/A" and total_f != "N/A":
-                        # Try to format as numbers, fallback to raw strings
                         try:
-                             base_error_msg += f". {int(current_f)} files were scanned out of the total {int(total_f)}"
+                            base_error_msg += f". {int(current_f)} files were scanned out of the total {int(total_f)}"
                         except (ValueError, TypeError):
-                             base_error_msg += f". {current_f}/{total_f} files processed"
+                            base_error_msg += f". {current_f}/{total_f} files processed"
                     if wb_info:
                         base_error_msg += f". The error returned by Workbench was: {wb_info}"
                     else:
-                        # If no specific 'info'/'comment', try the generic error fields as a last resort
                         generic_error = status_data.get("error_message", status_data.get("error", None))
                         if generic_error:
-                             base_error_msg += f". Detail: {generic_error}"
+                            base_error_msg += f". Detail: {generic_error}"
 
-                    # Log the filename where it might have failed
                     if current_filename:
-                         logger.warning(f"Failure occurred potentially around file: {current_filename}")
-                         print(f"Failure occurred potentially around file: {current_filename}") # Also print for visibility
+                        logger.warning(f"Failure occurred potentially around file: {current_filename}")
+                        print(f"Failure occurred potentially around file: {current_filename}")
 
-                # Raise the exception with the constructed, more informative message
-                raise builtins.Exception(base_error_msg)
+                raise ProcessError(base_error_msg, details=status_data)
 
-            # Still running or in an intermediate state
-            # Only print if status changed or it's the first/last few attempts for less noise
-            if current_status != last_status or i < 2 or i % 10 == 0: # Print if status changes, first 2 tries, or every 10th try
-                 print() # Newline after potential dots
-                 print(f"{process_description} status: {current_status}. Attempt {i+1}/{max_tries}.", end="", flush=True)
-                 last_status = current_status
+            if current_status != last_status or i < 2 or i % 10 == 0:
+                print()
+                print(f"{process_description} status: {current_status}. Attempt {i+1}/{max_tries}.", end="", flush=True)
+                last_status = current_status
             elif progress_indicator:
-                 print(".", end="", flush=True) # Print progress dot
+                print(".", end="", flush=True)
 
             time.sleep(wait_interval)
 
-        # If loop finishes, it's a timeout
-        print() # Newline after potential dots
-        # Include last known status in timeout message
-        raise builtins.Exception(
-            f"Timeout waiting for {process_description} to complete after {max_tries * wait_interval} seconds (Last Status: {last_status})."
+        print()
+        raise ProcessTimeoutError(
+            f"Timeout waiting for {process_description} to complete after {max_tries * wait_interval} seconds (Last Status: {last_status}).",
+            details={"last_status": last_status, "max_tries": max_tries, "wait_interval": wait_interval}
         )
 
     def _read_in_chunks(self, file_object: io.BufferedReader, chunk_size: int = 8 * 1024 * 1024) -> Generator[bytes, None, None]:
@@ -338,25 +342,68 @@ class Workbench:
                 break
             yield data
 
-    def _chunked_upload_request(self, scan_code: str, headers: dict, chunk: bytes) -> None:
-        """Sends a single chunk for upload."""
+    def _chunked_upload_request(
+        self,
+        url: str,
+        method: str,
+        data: Dict[str, Any],
+        files: Dict[str, Any],
+        headers: Dict[str, str],
+        chunk_size: int = 8192,
+        timeout: int = 30
+    ) -> Dict[str, Any]:
+        """
+        Send a request with chunked file upload support.
+
+        Args:
+            url: The URL to send the request to
+            method: The HTTP method to use
+            data: The data to send in the request
+            files: The files to upload
+            headers: The headers to include in the request
+            chunk_size: The size of each chunk in bytes
+            timeout: The timeout in seconds
+
+        Returns:
+            Dict[str, Any]: The response data
+
+        Raises:
+            NetworkError: If there are network issues during the request
+            ApiError: If there are API issues
+        """
         try:
-            # Use session for potential keep-alive
-            response = self.session.post(
-                self.api_url,
+            response = requests.request(
+                method=method,
+                url=url,
+                data=data,
+                files=files,
                 headers=headers,
-                data=chunk,
-                auth=(self.api_user, self.api_token), # Auth needed for direct upload endpoint
-                timeout=1800,
+                stream=True,
+                timeout=timeout
             )
-            logger.debug(f"Chunk upload response status: {response.status_code}")
-            logger.debug(f"Chunk upload response headers: {response.headers}")
-            response.raise_for_status() # Check for HTTP errors
+
+            if response.status_code >= 400:
+                raise ApiError(
+                    f"Request failed with status code {response.status_code}",
+                    details={
+                        "status_code": response.status_code,
+                        "response": response.text
+                    }
+                )
+
+            # Read the response in chunks
+            content = b""
+            for chunk in response.iter_content(chunk_size=chunk_size):
+                if chunk:
+                    content += chunk
+
+            return json.loads(content.decode("utf-8"))
 
         except requests.exceptions.RequestException as e:
-            error_msg = f"Network error during chunk upload: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            raise Exception(error_msg)
+            raise NetworkError(
+                f"Network error during {method} request to {url}",
+                details={"error": str(e)}
+            )
 
     def upload_files(self, scan_code: str, path: str, is_da_import: bool = False):
         """
@@ -417,13 +464,27 @@ class Workbench:
                     logger.warning(f"Failed to clean up temporary files: {e}")
 
     def get_scan_status(self, scan_type: str, scan_code: str) -> dict:
-        """Retrieves the status of a scan operation (SCAN or DEPENDENCY_ANALYSIS)."""
+        """
+        Retrieves the status of a scan operation (SCAN or DEPENDENCY_ANALYSIS).
+
+        Args:
+            scan_type: Type of scan operation (SCAN or DEPENDENCY_ANALYSIS)
+            scan_code: Code of the scan to check
+
+        Returns:
+            dict: The scan status data
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         payload = {
             "group": "scans",
             "action": "check_status",
             "data": {
                 "scan_code": scan_code,
-                "type": scan_type.upper(), # Ensure type is uppercase
+                "type": scan_type.upper(),
             },
         }
         response = self._send_request(payload)
@@ -432,12 +493,26 @@ class Workbench:
             return response["data"]
         else:
             error_msg = response.get("error", f"Unexpected response format: {response}")
-            raise builtins.Exception(
-                f"Failed to retrieve {scan_type} status for scan '{scan_code}': {error_msg}"
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Failed to retrieve {scan_type} status for scan '{scan_code}': {error_msg}",
+                details=response
             )
 
     def start_dependency_analysis(self, scan_code: str, import_only: bool = False):
-        """Starts or imports dependency analysis for a scan."""
+        """
+        Starts or imports dependency analysis for a scan.
+
+        Args:
+            scan_code: Code of the scan to start dependency analysis for
+            import_only: Whether to only import results without running analysis
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         payload = {
             "group": "scans",
             "action": "run_dependency_analysis",
@@ -456,9 +531,12 @@ class Workbench:
         if response.get("status") == "1":
             print(f"Dependency Analysis started for scan '{scan_code}'.")
         else:
-            # Error handled by _send_request, but add context
-            raise builtins.Exception(
-                f"Dependency Analysis for scan '{scan_code}' failed to start (see logs for details)."
+            error_msg = response.get("error", "Unknown error")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Dependency Analysis for scan '{scan_code}' failed to start: {error_msg}",
+                details=response
             )
 
     def wait_for_archive_extraction(
@@ -582,7 +660,20 @@ class Workbench:
             return {} # Return empty dict on error
 
     def scans_get_policy_warnings_counter(self, scan_code: str) -> Dict[str, Any]:
-        """Gets the count of policy warnings for a specific scan."""
+        """
+        Gets the count of policy warnings for a specific scan.
+
+        Args:
+            scan_code: Code of the scan to get policy warnings for
+
+        Returns:
+            Dict[str, Any]: The policy warnings counter data
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         payload = {
             "group": "scans",
             "action": "get_policy_warnings_counter",
@@ -592,8 +683,13 @@ class Workbench:
         if response.get("status") == "1" and "data" in response:
             return response["data"]
         else:
-            raise builtins.Exception(f"Error getting scan policy warnings counter for '{scan_code}' (see logs).")
-
+            error_msg = response.get("error", "Unknown error")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Error getting scan policy warnings counter for '{scan_code}': {error_msg}",
+                details=response
+            )
 
     def get_policy_warnings_info(self, scan_code: str) -> Dict[str, Any]:
         """Retrieves detailed policy warnings information for a scan."""
@@ -626,11 +722,24 @@ class Workbench:
             # Raise exception on API failure (status 0 or other errors)
             error_msg = response.get("error", f"Unexpected response: {response}")
             logger.error(f"Failed to get policy warnings info for scan '{scan_code}': {error_msg}")
-            raise builtins.Exception(f"API Error: Failed to get policy warnings info for scan '{scan_code}': {error_msg}")
+            raise Exception(f"API Error: Failed to get policy warnings info for scan '{scan_code}': {error_msg}")
 
     # --- Methods for fetching results ---
     def get_scan_identified_components(self, scan_code: str) -> List[Dict[str, Any]]:
-        """Gets identified components from KB scanning."""
+        """
+        Gets identified components from KB scanning.
+
+        Args:
+            scan_code: Code of the scan to get components from
+
+        Returns:
+            List[Dict[str, Any]]: List of identified components
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         payload = {
             "group": "scans",
             "action": "get_scan_identified_components",
@@ -638,14 +747,33 @@ class Workbench:
         }
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
-             # API returns a dict { comp_id: {details} }, convert to list
-             data = response["data"]
-             return list(data.values()) if isinstance(data, dict) else []
+            # API returns a dict { comp_id: {details} }, convert to list
+            data = response["data"]
+            return list(data.values()) if isinstance(data, dict) else []
         else:
-            raise builtins.Exception(f"Error retrieving identified components from scan '{scan_code}' (see logs).")
+            error_msg = response.get("error", "Unknown error")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Error retrieving identified components from scan '{scan_code}': {error_msg}",
+                details=response
+            )
 
     def get_scan_identified_licenses(self, scan_code: str) -> List[Dict[str, Any]]:
-        """Get the list of identified licenses for a scan."""
+        """
+        Get the list of identified licenses for a scan.
+
+        Args:
+            scan_code: Code of the scan to get licenses from
+
+        Returns:
+            List[Dict[str, Any]]: List of identified licenses
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         payload = {
             "group": "scans",
             "action": "get_scan_identified_licenses",
@@ -659,23 +787,37 @@ class Workbench:
             data = response["data"]
             if isinstance(data, list):
                 logger.debug(f"Successfully fetched {len(data)} unique licenses.")
-                return data # Return the list of licenses
+                return data
             else:
-                # Log unexpected data format but return empty list to avoid breaking caller
                 logger.warning(f"API returned success for get_scan_identified_licenses but 'data' was not a list: {type(data)}")
                 return []
-        elif response.get("status") == "1": # Status 1 but no data key
-             logger.warning("API returned success for get_scan_identified_licenses but no 'data' key found.")
-             return []
+        elif response.get("status") == "1":
+            logger.warning("API returned success for get_scan_identified_licenses but no 'data' key found.")
+            return []
         else:
-            # If _send_request didn't raise an error but status is not 1, raise one now
-            # This handles cases where the API might return status 0 for reasons other than non-fatal ones
             error_msg = response.get("error", f"Unexpected response format or status: {response}")
-            logger.error(f"Failed to get identified licenses for scan '{scan_code}'. Response: {response}")
-            raise builtins.Exception(f"Error getting identified licenses for scan '{scan_code}': {error_msg}")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Error getting identified licenses for scan '{scan_code}': {error_msg}",
+                details=response
+            )
 
     def get_dependency_analysis_results(self, scan_code: str) -> List[Dict[str, Any]]:
-        """Gets dependency analysis results."""
+        """
+        Gets dependency analysis results.
+
+        Args:
+            scan_code: Code of the scan to get results from
+
+        Returns:
+            List[Dict[str, Any]]: List of dependency analysis results
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         payload = {
             "group": "scans",
             "action": "get_dependency_analysis_results",
@@ -686,33 +828,51 @@ class Workbench:
             data = response["data"]
             return data if isinstance(data, list) else []
         elif response.get("status") == "1": # Success but no data key
-             logger.info(f"Dependency Analysis results requested for '{scan_code}', but no 'data' key in response. Assuming empty.")
-             return []
+            logger.info(f"Dependency Analysis results requested for '{scan_code}', but no 'data' key in response. Assuming empty.")
+            return []
         else:
             # Check for specific "not run yet" error
             error_msg = response.get("error", "")
             if "Dependency analysis has not been run" in error_msg:
-                 logger.info(f"Dependency analysis results requested for '{scan_code}', but analysis has not been run.")
-                 return [] # Return empty list, not an error
+                logger.info(f"Dependency analysis results requested for '{scan_code}', but analysis has not been run.")
+                return [] # Return empty list, not an error
+            elif "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
             else:
-                 raise builtins.Exception(f"Error getting dependency analysis results for scan '{scan_code}' (see logs).")
-
+                raise ApiError(
+                    f"Error getting dependency analysis results for scan '{scan_code}': {error_msg}",
+                    details=response
+                )
 
     def _assert_process_can_start(self, process_type: str, scan_code: str):
-        """Checks if a SCAN or DEPENDENCY_ANALYSIS can be started."""
+        """
+        Checks if a SCAN or DEPENDENCY_ANALYSIS can be started.
+
+        Args:
+            process_type: Type of process to check (SCAN or DEPENDENCY_ANALYSIS)
+            scan_code: Code of the scan to check
+
+        Raises:
+            CompatibilityError: If the process cannot be started due to incompatible state
+            ProcessError: If there are process-related issues
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+            ScanNotFoundError: If the scan doesn't exist
+        """
         try:
             scan_status = self.get_scan_status(process_type, scan_code)
             current_status = scan_status.get("status", "UNKNOWN").upper()
             # Allow starting if NEW, FINISHED, FAILED, or CANCELLED
             allowed_statuses = ["NEW", "FINISHED", "FAILED", "CANCELLED"]
             if current_status not in allowed_statuses:
-                raise builtins.Exception(
+                raise CompatibilityError(
                     f"Cannot start {process_type.lower()} for '{scan_code}'. Current status is {current_status} (Must be one of {allowed_statuses})."
                 )
             print(f"The {process_type.capitalize()} for '{scan_code}' can start (Current status: {current_status}).")
+        except (ApiError, NetworkError, ScanNotFoundError):
+            raise
         except Exception as e:
-            # Re-raise with context
-            raise builtins.Exception(f"Could not verify if {process_type.lower()} can start for '{scan_code}': {e}")
+            raise ProcessError(f"Could not verify if {process_type.lower()} can start for '{scan_code}'", details={"error": str(e)})
 
     def assert_scan_can_start(self, scan_code: str):
         """Checks if a KB scan can start."""
@@ -728,7 +888,19 @@ class Workbench:
         recursively_extract_archives: bool,
         jar_file_extraction: bool,
     ):
-        """Triggers archive extraction for a scan."""
+        """
+        Triggers archive extraction for a scan.
+
+        Args:
+            scan_code: Code of the scan to extract archives for
+            recursively_extract_archives: Whether to recursively extract archives
+            jar_file_extraction: Whether to extract JAR files
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
         print(f"Extracting Uploaded Archives for Scan '{scan_code}'...")
         payload = {
             "group": "scans",
@@ -745,11 +917,26 @@ class Workbench:
             print(f"Archive Extraction operation successfully queued/completed for scan '{scan_code}'.")
             return True
         else:
-            raise builtins.Exception(f"Archive extraction failed for scan '{scan_code}' (see logs).")
+            error_msg = response.get("error", "Unknown error")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Archive extraction failed for scan '{scan_code}': {error_msg}",
+                details=response
+            )
 
 
     def list_projects(self) -> List[Dict[str, Any]]:
-        """Retrieves a list of all projects."""
+        """
+        Retrieves a list of all projects.
+
+        Returns:
+            List[Dict[str, Any]]: List of project data
+
+        Raises:
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
         logger.debug("Listing all projects...")
         payload = {
             "group": "projects",
@@ -767,10 +954,19 @@ class Workbench:
                 return []
         else:
             error_msg = response.get("error", f"Unexpected response: {response}")
-            raise builtins.Exception(f"Failed to list projects: {error_msg}")
+            raise ApiError(f"Failed to list projects: {error_msg}", details=response)
 
     def list_scans(self) -> List[Dict[str, Any]]:
-        """Retrieves a list of all scans."""
+        """
+        Retrieves a list of all scans.
+
+        Returns:
+            List[Dict[str, Any]]: List of scan data
+
+        Raises:
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
         logger.debug("Listing all scans...")
         payload = {
             "group": "scans",
@@ -785,36 +981,49 @@ class Workbench:
                 scan_list = []
                 for scan_id, scan_details in data.items():
                     if isinstance(scan_details, dict):
-                         # Add the 'id' from the key and potentially 'code' if present
-                         try: # Handle potential non-integer scan_id keys if API is weird
-                              scan_details['id'] = int(scan_id)
-                         except ValueError:
-                              logger.warning(f"Non-integer scan ID key found in list_scans response: {scan_id}")
-                              scan_details['id'] = scan_id # Keep original key if not int
+                        # Add the 'id' from the key and potentially 'code' if present
+                        try: # Handle potential non-integer scan_id keys if API is weird
+                            scan_details['id'] = int(scan_id)
+                        except ValueError:
+                            logger.warning(f"Non-integer scan ID key found in list_scans response: {scan_id}")
+                            scan_details['id'] = scan_id # Keep original key if not int
 
-                         # 'code' should be in scan_details based on previous API info
-                         if 'code' not in scan_details:
-                              logger.warning(f"Scan details for ID {scan_id} missing 'code' field: {scan_details}")
-                         scan_list.append(scan_details)
+                        # 'code' should be in scan_details based on previous API info
+                        if 'code' not in scan_details:
+                            logger.warning(f"Scan details for ID {scan_id} missing 'code' field: {scan_details}")
+                        scan_list.append(scan_details)
                     else:
-                         logger.warning(f"Unexpected format for scan details with ID {scan_id}: {type(scan_details)}")
+                        logger.warning(f"Unexpected format for scan details with ID {scan_id}: {type(scan_details)}")
                 logger.info(f"Successfully listed {len(scan_list)} scans.")
                 return scan_list
             elif isinstance(data, list) and not data: # Handle API returning empty list for no scans
-                 logger.info("Successfully listed 0 scans (API returned empty list).")
-                 return []
+                logger.info("Successfully listed 0 scans (API returned empty list).")
+                return []
             else:
                 logger.warning(f"API returned success for list_scans but 'data' was not a dict or empty list: {type(data)}")
                 return [] # Return empty list on unexpected format
         elif response.get("status") == "1": # Status 1 but no data key
-             logger.warning(f"API returned success for list_scans but no 'data' key found.")
-             return []
+            logger.warning(f"API returned success for list_scans but no 'data' key found.")
+            return []
         else:
             error_msg = response.get("error", f"Unexpected response: {response}")
-            raise builtins.Exception(f"Failed to list scans: {error_msg}")
+            raise ApiError(f"Failed to list scans: {error_msg}", details=response)
 
     def get_project_scans(self, project_code: str) -> List[Dict[str, Any]]:
-        """Retrieves a list of all scans within a specific project."""
+        """
+        Retrieves a list of all scans within a specific project.
+
+        Args:
+            project_code: Code of the project to get scans for
+
+        Returns:
+            List[Dict[str, Any]]: List of scan data
+
+        Raises:
+            ApiError: If there are API issues
+            ProjectNotFoundError: If the project doesn't exist
+            NetworkError: If there are network issues
+        """
         logger.debug(f"Listing scans for the '{project_code}' project...")
         payload = {
             "group": "projects",
@@ -833,16 +1042,16 @@ class Workbench:
                 logger.warning(f"API returned success for get_all_scans but 'data' was not a list: {type(data)}")
                 return []
         elif response.get("status") == "1":
-             logger.warning(f"API returned success for get_all_scans but no 'data' key found.")
-             return []
+            logger.warning(f"API returned success for get_all_scans but no 'data' key found.")
+            return []
         else:
             error_msg = response.get("error", f"Unexpected response: {response}")
             # Treat project not found as empty list of scans
             if "Project code does not exist" in error_msg or "row_not_found" in error_msg:
-                 logger.warning(f"Project '{project_code}' not found when trying to list its scans.")
-                 return []
+                logger.warning(f"Project '{project_code}' not found when trying to list its scans.")
+                return []
             else:
-                 raise builtins.Exception(f"Failed to list scans for project '{project_code}': {error_msg}")
+                raise ApiError(f"Failed to list scans for project '{project_code}': {error_msg}", details=response)
 
     def create_project(self, project_name: str) -> str:
         """
@@ -1083,15 +1292,35 @@ class Workbench:
         selection_view: Optional[str] = None,
         disclaimer: Optional[str] = None,
         include_vex: bool = True,
-    ) -> Union[int, requests.Response]: # Return type remains Union for scan scope
+    ) -> Union[int, requests.Response]:
         """
         Triggers report generation for a scan or project.
         Project reports are always async. Scan reports can be sync or async.
         Returns process queue ID for async, or raw response for sync scan reports.
+
+        Args:
+            scope: Either 'scan' or 'project'
+            project_code: Code of the project
+            scan_code: Code of the scan (required for scan scope)
+            report_type: Type of report to generate
+            selection_type: Optional selection type
+            selection_view: Optional selection view
+            disclaimer: Optional disclaimer text
+            include_vex: Whether to include VEX data
+
+        Returns:
+            Union[int, requests.Response]: Process queue ID for async reports, or raw response for sync reports
+
+        Raises:
+            ValidationError: If scope is invalid or required parameters are missing
+            ApiError: If there are API issues
+            ProjectNotFoundError: If the project doesn't exist
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
         """
         scope = scope.lower()
         if scope not in ["scan", "project"]:
-            raise ValueError("Invalid scope provided to generate_report. Must be 'scan' or 'project'.")
+            raise ValidationError("Invalid scope provided to generate_report. Must be 'scan' or 'project'.")
 
         is_project_scope = (scope == "project")
 
@@ -1100,14 +1329,12 @@ class Workbench:
             use_async = True
             # Validate report type against allowed project types
             if report_type not in self.PROJECT_REPORT_TYPES:
-                 # Raise error immediately if type not supported for project
-                 raise ValueError(f"Report type '{report_type}' is not supported for project scope reports.")
+                raise ValidationError(f"Report type '{report_type}' is not supported for project scope reports.")
         else: # scan scope
             use_async = report_type in self.ASYNC_REPORT_TYPES
             # No need to validate scan report types here, API will handle it
 
         async_value = "1" if use_async else "0" # Will always be "1" for project scope
-
 
         # Determine group, action, and primary code based on scope
         if is_project_scope:
@@ -1116,14 +1343,16 @@ class Workbench:
             code_key = "project_code"
             code_value = project_code
             entity_name = f"project '{project_code}'"
-            if not project_code: raise ValueError("project_code is required for project scope reports.")
+            if not project_code:
+                raise ValidationError("project_code is required for project scope reports.")
         else: # scan scope
             group = "scans"
             action = "generate_report"
             code_key = "scan_code"
             code_value = scan_code
             entity_name = f"scan '{scan_code}'"
-            if not scan_code: raise ValueError("scan_code is required for scan scope reports.")
+            if not scan_code:
+                raise ValidationError("scan_code is required for scan scope reports.")
 
         logger.info(f"Requesting generation of '{report_type}' report for {entity_name} (Async: {use_async})...")
 
@@ -1134,12 +1363,12 @@ class Workbench:
             "include_vex": include_vex,
         }
         # Add optional parameters if provided
-        if selection_type: payload_data["selection_type"] = selection_type
-        if selection_view: payload_data["selection_view"] = selection_view
-        if disclaimer: payload_data["disclaimer"] = disclaimer
-        # Add project-specific options if needed (e.g., report_content_type for xlsx)
-        # if is_project_scope and report_type == 'xlsx' and report_content_type:
-        #     payload_data["report_content_type"] = report_content_type
+        if selection_type:
+            payload_data["selection_type"] = selection_type
+        if selection_view:
+            payload_data["selection_view"] = selection_view
+        if disclaimer:
+            payload_data["disclaimer"] = disclaimer
 
         payload = {
             "group": group,
@@ -1153,14 +1382,14 @@ class Workbench:
         if "_raw_response" in response_data:
             # This block should ONLY be reached for SYNCHRONOUS SCAN reports
             if is_project_scope:
-                 # This is unexpected based on the requirement that project reports are always async
-                 logger.error(f"API returned a synchronous response for a project report ({report_type}), which was not expected. Cannot proceed.")
-                 raise builtins.Exception(f"Unexpected synchronous response received for project report '{report_type}'.")
+                # This is unexpected based on the requirement that project reports are always async
+                logger.error(f"API returned a synchronous response for a project report ({report_type}), which was not expected. Cannot proceed.")
+                raise ApiError(f"Unexpected synchronous response received for project report '{report_type}'.")
             else:
-                 # Handle synchronous scan report
-                 raw_response = response_data["_raw_response"]
-                 logger.info(f"Synchronous report generation likely completed for {entity_name}. Returning raw response object.")
-                 return raw_response
+                # Handle synchronous scan report
+                raw_response = response_data["_raw_response"]
+                logger.info(f"Synchronous report generation likely completed for {entity_name}. Returning raw response object.")
+                return raw_response
 
         elif response_data.get("status") == "1" and "data" in response_data and "process_queue_id" in response_data["data"]:
             # This block handles ASYNC scan reports AND ALL project reports
@@ -1170,19 +1399,39 @@ class Workbench:
         else:
             # Handle API errors (status 0 or unexpected format)
             error_msg = response_data.get("error", f"Unexpected response: {response_data}")
-            raise builtins.Exception(f"Failed to request report generation for {entity_name}: {error_msg}")
+            if "Project does not exist" in error_msg or "row_not_found" in error_msg:
+                raise ProjectNotFoundError(f"Project '{project_code}' not found")
+            elif "Scan not found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(f"Failed to request report generation for {entity_name}: {error_msg}", details=response_data)
 
     def check_report_generation_status(
         self,
         scope: str, 
         process_id: int,
-        scan_code: Optional[str] = None, # Keep for scan scope context if needed by API later
-        project_code: Optional[str] = None # Keep for project scope context if needed by API later
+        scan_code: Optional[str] = None,
+        project_code: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Checks the status of an asynchronous report generation process."""
+        """
+        Checks the status of an asynchronous report generation process.
+
+        Args:
+            scope: Either 'scan' or 'project'
+            process_id: ID of the process to check
+            scan_code: Optional scan code for context
+            project_code: Optional project code for context
+
+        Returns:
+            Dict[str, Any]: The process status data
+
+        Raises:
+            ValidationError: If scope is invalid
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
         scope = scope.lower()
         if scope not in ["scan", "project"]:
-            raise ValueError("Invalid scope provided to check_report_generation_status.")
+            raise ValidationError("Invalid scope provided to check_report_generation_status.")
 
         group = "projects" if scope == "project" else "scans"
         entity_name = f"project '{project_code}'" if scope == "project" else f"scan '{scan_code}'"
@@ -1192,12 +1441,8 @@ class Workbench:
             "group": group,
             "action": "check_status",
             "data": {
-                # API schema only shows process_id and type needed
                 "process_id": str(process_id),
                 "type": "REPORT_GENERATION",
-                # Add scan_code/project_code if API requires them for context, e.g.:
-                # **({ "scan_code": scan_code } if scope == "scan" else {}),
-                # **({ "project_code": project_code } if scope == "project" else {}),
             }
         }
         response = self._send_request(payload)
@@ -1205,17 +1450,29 @@ class Workbench:
             return response["data"]
         else:
             error_msg = response.get("error", f"Unexpected response: {response}")
-            raise builtins.Exception(f"Failed to check report status for process {process_id} ({entity_name}): {error_msg}")
+            raise ApiError(f"Failed to check report status for process {process_id} ({entity_name}): {error_msg}", details=response)
 
 
-    def download_report(self, scope: str, process_id: int): # Corrected signature
+    def download_report(self, scope: str, process_id: int):
         """
         Downloads a generated report using its process ID.
         Returns the requests.Response object containing the report content.
+
+        Args:
+            scope: Either 'scan' or 'project'
+            process_id: ID of the process to download report from
+
+        Returns:
+            requests.Response: The response object containing the report content
+
+        Raises:
+            ValidationError: If scope is invalid
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
         """
         scope = scope.lower()
         if scope not in ["scan", "project"]:
-            raise ValueError("Invalid scope provided to download_report.")
+            raise ValidationError("Invalid scope provided to download_report.")
 
         report_entity = "projects" if scope == "project" else "scans"
         logger.debug(f"Attempting to download report for process ID '{process_id}' (entity: {report_entity})...")
@@ -1269,10 +1526,10 @@ class Workbench:
                     error_json = r.json()
                     error_msg = error_json.get("error", "Unknown error")
                     logger.error(f"API error during download: {error_msg} | JSON: {error_json}")
-                    raise builtins.Exception(f"Failed to download report (process ID {process_id}): API returned error - {error_msg}")
+                    raise ApiError(f"Failed to download report (process ID {process_id}): API returned error - {error_msg}", details=error_json)
                 except json.JSONDecodeError as json_err:
                     logger.error(f"Failed to decode JSON error response during download: {r.text[:500]}", exc_info=True)
-                    raise builtins.Exception(f"Failed to download report (process ID {process_id}): Could not parse API error response.")
+                    raise ApiError(f"Failed to download report (process ID {process_id}): Could not parse API error response.", details={"response_text": r.text[:500]})
 
             # If we reach here, it's likely the actual report content. Return the response object.
             logger.debug("Download request successful, returning response object.")
@@ -1280,10 +1537,10 @@ class Workbench:
 
         except requests.exceptions.RequestException as req_err:
             logger.error(f"Failed to initiate report download request for process {process_id}: {req_err}", exc_info=True)
-            raise builtins.Exception(f"Failed to download report (process ID {process_id}): {req_err}")
+            raise NetworkError(f"Failed to download report (process ID {process_id}): {req_err}")
         except Exception as final_dl_err:
-             logger.error(f"Unexpected error within download_report function for process {process_id}: {final_dl_err}", exc_info=True)
-             raise
+            logger.error(f"Unexpected error within download_report function for process {process_id}: {final_dl_err}", exc_info=True)
+            raise ApiError(f"Unexpected error during report download (process ID {process_id})", details={"error": str(final_dl_err)})
 
     @staticmethod
     def format_duration(duration_seconds):
@@ -1325,4 +1582,45 @@ class Workbench:
         except Exception as e:
             logger.error(f"Failed to set environment variable '{name}': {e}")
             print(f"Warning: Failed to set environment variable '{name}': {e}")
+
+    def get_scan_logs(self, scan_code: str) -> List[Dict[str, Any]]:
+        """
+        Retrieves logs for a specific scan.
+
+        Args:
+            scan_code: Code of the scan to get logs for
+
+        Returns:
+            List[Dict[str, Any]]: List of log entries
+
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
+        logger.debug(f"Retrieving logs for scan '{scan_code}'...")
+        payload = {
+            "group": "scans",
+            "action": "get_logs",
+            "data": {
+                "scan_code": scan_code
+            }
+        }
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            data = response["data"]
+            if isinstance(data, list):
+                logger.info(f"Successfully retrieved {len(data)} log entries for scan '{scan_code}'.")
+                return data
+            else:
+                logger.warning(f"API returned success for get_logs but 'data' was not a list: {type(data)}")
+                return []
+        elif response.get("status") == "1":
+            logger.warning(f"API returned success for get_logs but no 'data' key found.")
+            return []
+        else:
+            error_msg = response.get("error", f"Unexpected response: {response}")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(f"Failed to get logs for scan '{scan_code}': {error_msg}", details=response)
 

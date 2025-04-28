@@ -8,8 +8,8 @@ import logging
 import argparse
 import re
 import requests
-import builtins # Still needed as exceptions weren't refactored yet
 from typing import Generator, Optional, Dict, Any, List, Union, Tuple
+from datetime import datetime
 
 # Import Workbench class for type hinting and accessing constants/methods if needed
 # Use relative import within the package
@@ -133,9 +133,8 @@ def _ensure_scan_compatibility(params: argparse.Namespace, existing_scan_info: D
     if error_message:
         print(f"Error: Incompatible scan usage.")
         print(error_message)
-        logger.error(f"Incompatible usage for existing scan '{scan_code}': {error_message}") # Use passed scan_code
-        # Raise exception instead of sys.exit
-        raise builtins.Exception(f"Incompatible usage for existing scan '{scan_code}': {error_message}")
+        logger.error(f"Incompatible usage for existing scan '{scan_code}': {error_message}")
+        raise CompatibilityError(f"Incompatible usage for existing scan '{scan_code}': {error_message}")
     else:
         print("Compatibility check passed.")
         # Log reuse notes
@@ -167,10 +166,13 @@ def _resolve_scan(
         A tuple: (scan_code, scan_id).
 
     Raises:
-        builtins.Exception: If listing fails, scan not found (and create_if_missing is False),
-                            multiple scans found in global search, creation fails,
-                            or compatibility check fails.
-        ValueError: If create_if_missing is True but project_name is None.
+        ConfigurationError: If create_if_missing is True but project_name is None
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ValidationError: If there are data validation issues
+        ScanNotFoundError: If the scan is not found and create_if_missing is False
+        CompatibilityError: If the existing scan is not compatible with the current operation
+        WorkbenchAgentError: For unexpected errors during the resolution process
     """
     project_code: Optional[str] = None
     scan_list: List[Dict[str, Any]] = []
@@ -185,18 +187,18 @@ def _resolve_scan(
         try:
             scan_list = workbench.get_project_scans(project_code)
         except Exception as e:
-            raise builtins.Exception(f"Failed to list scans {search_context} while resolving '{scan_name}': {e}") from e
+            raise ApiError(f"Failed to list scans {search_context} while resolving '{scan_name}': {e}") from e
     else:
         # Global search
         search_context = "globally"
         print(f"Resolving scan '{scan_name}' globally (Create if missing: {create_if_missing})...")
         if create_if_missing:
             # We cannot create a scan without a project context.
-            raise ValueError("Cannot create a scan (create_if_missing=True) without specifying a --project-name.")
+            raise ConfigurationError("Cannot create a scan (create_if_missing=True) without specifying a --project-name.")
         try:
             scan_list = workbench.list_scans() # list_scans adds 'id' and 'code'
         except Exception as e:
-            raise builtins.Exception(f"Failed to list all scans while resolving '{scan_name}' globally: {e}") from e
+            raise ApiError(f"Failed to list all scans while resolving '{scan_name}' globally: {e}") from e
 
     # 2. Search for Scan by Name
     found_scans = [s for s in scan_list if s.get('name') == scan_name]
@@ -207,28 +209,27 @@ def _resolve_scan(
         scan_info = found_scans[0]
         scan_code = scan_info.get('code')
         scan_id_str = scan_info.get('id')
-        resolved_project_code = scan_info.get('project_code', project_code) # Use project_code from scan info if available (global search)
+        resolved_project_code = scan_info.get('project_code', project_code)
 
         if not scan_code or scan_id_str is None:
-            raise builtins.Exception(f"Found scan '{scan_name}' {search_context} but it's missing required 'code' or 'id' fields.")
+            raise ValidationError(f"Found scan '{scan_name}' {search_context} but it's missing required 'code' or 'id' fields.")
 
         try:
             scan_id = int(scan_id_str)
             print(f"Found existing scan '{scan_name}' with code '{scan_code}' and ID {scan_id} (Project: {resolved_project_code}).")
 
             # Perform compatibility check ONLY if the scan existed AND creation was a possibility
-            # (i.e., called from scan, import-da, scan-git)
             if create_if_missing:
                 _ensure_scan_compatibility(params, scan_info, scan_code)
 
             return scan_code, scan_id
         except (ValueError, TypeError):
-            raise builtins.Exception(f"Found scan '{scan_name}' {search_context} but its ID '{scan_id_str}' is not a valid integer.")
+            raise ValidationError(f"Found scan '{scan_name}' {search_context} but its ID '{scan_id_str}' is not a valid integer.")
 
     elif len(found_scans) > 1:
         # Multiple scans found (only possible in global search)
         project_codes = [s.get('project_code', 'UnknownProject') for s in found_scans]
-        raise builtins.Exception(
+        raise ValidationError(
             f"Multiple scans found globally with the name '{scan_name}' in projects: {', '.join(project_codes)}. "
             f"Please specify the --project-name to disambiguate."
         )
@@ -238,7 +239,7 @@ def _resolve_scan(
             # Creation is requested and allowed (project_name must be set, checked earlier)
             print(f"Scan '{scan_name}' not found {search_context}. Creating it...")
             if not project_code: # Should be impossible due to earlier checks, but safeguard
-                 raise ValueError("Internal Error: project_code not resolved before scan creation attempt.")
+                 raise ConfigurationError("Internal Error: project_code not resolved before scan creation attempt.")
             try:
                 # Prepare Git details if needed
                 create_git_url = getattr(params, 'git_url', None) if params.command == 'scan-git' else None
@@ -248,172 +249,163 @@ def _resolve_scan(
 
                 # Trigger creation
                 creation_triggered = workbench.create_webapp_scan(
-                    scan_name,
-                    project_code,
+                    project_code=project_code,
+                    scan_name=scan_name,
                     git_url=create_git_url,
                     git_branch=create_git_branch,
                     git_tag=create_git_tag,
                     git_depth=create_git_depth
                 )
-
-                # List again to find the code and ID (essential)
-                print(f"Verifying scan details for '{scan_name}' in project '{project_code}' after creation attempt...")
-                time.sleep(3) # Small delay for potential backend consistency
-                project_scans_after_create = workbench.get_project_scans(project_code)
-                scan_info_after_create = next((s for s in project_scans_after_create if s.get('name') == scan_name), None)
-
-                if scan_info_after_create:
-                    scan_code = scan_info_after_create.get('code')
-                    scan_id_str = scan_info_after_create.get('id')
-                    if not scan_code or not scan_id_str:
-                        raise builtins.Exception(f"Found scan '{scan_name}' after creation attempt but it's missing required 'code' or 'id' fields.")
-                    try:
-                        scan_id = int(scan_id_str)
-                        if creation_triggered:
-                            print(f"Scan '{scan_name}' created successfully with code '{scan_code}' and ID {scan_id}.")
-                        else:
-                            print(f"Scan '{scan_name}' found after creation attempt (likely existed) with code '{scan_code}' and ID {scan_id}.")
-                        # No compatibility check needed for newly created scan
-                        return scan_code, scan_id
-                    except (ValueError, TypeError):
-                        raise builtins.Exception(f"Found scan '{scan_name}' after creation attempt but its ID '{scan_id_str}' is not a valid integer.")
-                else:
-                    # Critical error - creation reported success/existence but scan not found
-                    raise builtins.Exception(f"Critical Error: Scan '{scan_name}' not found in project '{project_code}' after creation request.")
-
+                if not creation_triggered:
+                    raise ApiError(f"Failed to create scan '{scan_name}' {search_context}")
+                
+                # Get the newly created scan's details
+                scan_list = workbench.get_project_scans(project_code)
+                new_scan = next((s for s in scan_list if s.get('name') == scan_name), None)
+                if not new_scan:
+                    raise ApiError(f"Failed to retrieve newly created scan '{scan_name}' {search_context}")
+                
+                scan_code = new_scan.get('code')
+                scan_id_str = new_scan.get('id')
+                if not scan_code or scan_id_str is None:
+                    raise ValidationError(f"Newly created scan '{scan_name}' is missing required 'code' or 'id' fields.")
+                
+                try:
+                    scan_id = int(scan_id_str)
+                    print(f"Created new scan '{scan_name}' with code '{scan_code}' and ID {scan_id} (Project: {project_code}).")
+                    return scan_code, scan_id
+                except (ValueError, TypeError):
+                    raise ValidationError(f"Newly created scan '{scan_name}' has invalid ID '{scan_id_str}'")
             except Exception as e:
-                # Catch potential errors during creation trigger or the subsequent list/find
-                raise builtins.Exception(f"Failed to create or verify scan '{scan_name}' {search_context}: {e}") from e
+                raise ApiError(f"Failed to create scan '{scan_name}' {search_context}: {e}") from e
         else:
-            # Creation not allowed, raise error
-            error_msg = f"Scan '{scan_name}' not found {search_context}, and creation was not requested."
-            logger.error(error_msg)
-            raise builtins.Exception(error_msg)
+            raise ScanNotFoundError(f"Scan '{scan_name}' not found {search_context}")
 
 # --- File Saving ---
 
-def _save_report_content(
-    response: requests.Response,
-    output_path: str,
-    report_scope: str,
-    name_component: str, # Will be project_name or scan_name from params
-    report_type: str
-):
+def _save_report_content(content: str, output_dir: str, scope: str, name: str, report_type: str) -> None:
     """
-    Handles saving report content from a requests.Response object into the specified directory.
-    Constructs filename based on scope, name, and type.
+    Saves report content to a file in the specified output directory.
+    
+    Args:
+        content: The report content to save
+        output_dir: Directory to save the report in
+        scope: The scope of the report
+        name: The name of the report
+        report_type: The type of report
+        
+    Raises:
+        FileSystemError: If there are file system related errors
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during report saving
     """
-    logger.debug(f"Attempting to save report content to directory: {output_path}")
-
-    final_output_path = None
-    invalid_chars = r'[\\/*?:"<>|]'
-    safe_name_component = re.sub(invalid_chars, '_', name_component) if name_component else "unknown_name"
-    safe_report_type = re.sub(invalid_chars, '_', report_type)
-    safe_report_scope = re.sub(invalid_chars, '_', report_scope)
-
-    content_type = response.headers.get('content-type', '').split(';')[0].strip()
-    extension_map = {
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-        'application/vnd.ms-excel': '.xls',
-        'application/zip': '.zip',
-        'application/spdx+json': '.spdx.json',
-        'application/vnd.cyclonedx+json': '.cdx.json',
-        'application/json': '.json',
-        'text/html': '.html',
-        'text/plain': '.txt',
-        'application/pdf': '.pdf',
-        'application/octet-stream': '.bin',
-    }
-    extension = extension_map.get(content_type, '.bin')
-    logger.debug(f"Determined extension '{extension}' from Content-Type '{content_type}'")
-
-    new_filename = f"{safe_report_scope}-{safe_name_component}-{safe_report_type}{extension}"
-    final_output_path = os.path.join(output_path, new_filename)
-    logger.info(f"Constructed report filename: {new_filename}")
-
-    output_dir = os.path.dirname(final_output_path)
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-    else:
-         logger.error("Invalid output directory path derived for saving report.")
-         raise ValueError("Invalid output directory path derived.")
-
-    print(f"Saving report content to: {final_output_path}")
-    bytes_written = 0
     try:
-        with open(final_output_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    bytes_written += len(chunk)
-        if bytes_written == 0:
-             logger.warning(f"Saved report file '{final_output_path}' is empty (0 bytes).")
-    except IOError as write_err:
-         logger.error(f"Failed to write report to file '{final_output_path}': {write_err}", exc_info=True)
-         raise builtins.Exception(f"Failed to write report content to '{final_output_path}': {write_err}")
-    except Exception as e:
-         logger.error(f"Unexpected error saving report content: {e}", exc_info=True)
-         raise
-
-def save_results(save_path_arg: str, results_dict: dict, scan_code: str):
-    """Saves the results dictionary to a specified path as a JSON file."""
-    if not save_path_arg or not results_dict:
-        logger.info("No save path provided or no results collected, skipping save.")
-        return
-
-    fname = None
-    _folder = None
-    base_filename = f"wb_results_{scan_code}.json"
-
-    if os.path.isdir(save_path_arg):
-        _folder = save_path_arg
-        fname = os.path.join(_folder, base_filename)
-    elif save_path_arg.endswith(os.path.sep) or save_path_arg.endswith('/'):
-        _folder = save_path_arg
-        fname = os.path.join(_folder, base_filename)
-    else:
-        _folder = os.path.dirname(save_path_arg)
-        _basename = os.path.basename(save_path_arg)
-        if not _basename:
-             _folder = save_path_arg
-             fname = os.path.join(_folder, base_filename)
-        elif not _basename.lower().endswith(".json"):
-             if os.path.exists(save_path_arg) and os.path.isdir(save_path_arg):
-                  _folder = save_path_arg
-                  fname = os.path.join(_folder, base_filename)
-             else:
-                  fname = save_path_arg if _folder else os.path.join(".", save_path_arg)
-                  if not fname.lower().endswith(".json"):
-                       fname += ".json"
-                  _folder = os.path.dirname(fname)
-        else:
-             fname = save_path_arg
-             _folder = os.path.dirname(fname)
-
-    if not _folder:
-        _folder = "."
-        fname = os.path.join(_folder, fname)
-
-    if not os.path.exists(_folder):
+        # Validate inputs
+        if not content:
+            raise ValidationError("Report content is empty")
+        if not output_dir:
+            raise ValidationError("Output directory is not specified")
+        if not name:
+            raise ValidationError("Report name is not specified")
+            
+        # Create sanitized filename
         try:
-            os.makedirs(_folder, exist_ok=True)
-            print(f"Created directory for results: {_folder}")
+            safe_name = re.sub(r'[^\w\-_.]', '_', name)
+            safe_scope = re.sub(r'[^\w\-_.]', '_', scope)
+            safe_type = re.sub(r'[^\w\-_.]', '_', report_type)
+            
+            filename = f"{safe_scope}_{safe_name}_{safe_type}.txt"
+            filepath = os.path.join(output_dir, filename)
+        except Exception as e:
+            logger.error(f"Failed to create safe filename: {e}", exc_info=True)
+            raise ValidationError(f"Failed to create safe filename: {e}") from e
+            
+        # Ensure output directory exists
+        try:
+            os.makedirs(output_dir, exist_ok=True)
         except OSError as e:
-            print(f"Error: Could not create directory '{_folder}': {e}")
-            logger.error(f"Error creating directory {_folder}", exc_info=True)
-            return
+            logger.error(f"Failed to create output directory {output_dir}: {e}", exc_info=True)
+            raise FileSystemError(f"Failed to create output directory: {e}") from e
+            
+        # Write report content
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"Saved report to {filepath}")
+        except IOError as e:
+            logger.error(f"Failed to write report to {filepath}: {e}", exc_info=True)
+            raise FileSystemError(f"Failed to write report: {e}") from e
+            
+    except (ValidationError, FileSystemError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error saving report: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to save report: {e}", details={
+            "error": str(e),
+            "scope": scope,
+            "name": name,
+            "type": report_type
+        }) from e
 
+def save_results(save_path: str, results_dict: dict, scan_code: str) -> None:
+    """
+    Saves scan results to a JSON file.
+    
+    Args:
+        save_path: Directory to save the results in
+        results_dict: Dictionary containing the scan results
+        scan_code: The scan code identifier
+        
+    Raises:
+        FileSystemError: If there are file system related errors
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during results saving
+    """
     try:
-        with open(fname, "w", encoding='utf-8') as file:
-            json.dump(results_dict, file, indent=4, ensure_ascii=False)
-            print(f"Scan results saved to: {fname}")
-            logger.info(f"Scan results saved to: {fname}")
-    except IOError as e:
-        print(f"Error: Could not write results to file '{fname}': {e}")
-        logger.error(f"Error writing results to {fname}", exc_info=True)
-    except TypeError as e:
-         print(f"Error: Could not serialize results to JSON for saving to '{fname}': {e}")
-         logger.error(f"Error serializing results to JSON", exc_info=True)
+        # Validate inputs
+        if not save_path:
+            raise ValidationError("Save path is not specified")
+        if not results_dict:
+            raise ValidationError("Results dictionary is empty")
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Create sanitized filename
+        try:
+            safe_scan_code = re.sub(r'[^\w\-_.]', '_', scan_code)
+            filename = f"scan_results_{safe_scan_code}.json"
+            filepath = os.path.join(save_path, filename)
+        except Exception as e:
+            logger.error(f"Failed to create safe filename: {e}", exc_info=True)
+            raise ValidationError(f"Failed to create safe filename: {e}") from e
+            
+        # Ensure output directory exists
+        try:
+            os.makedirs(save_path, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Failed to create output directory {save_path}: {e}", exc_info=True)
+            raise FileSystemError(f"Failed to create output directory: {e}") from e
+            
+        # Write results to file
+        try:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(results_dict, f, indent=2)
+            print(f"Saved scan results to {filepath}")
+        except IOError as e:
+            logger.error(f"Failed to write results to {filepath}: {e}", exc_info=True)
+            raise FileSystemError(f"Failed to write results: {e}") from e
+        except TypeError as e:
+            logger.error(f"Failed to serialize results to JSON: {e}", exc_info=True)
+            raise ValidationError(f"Failed to serialize results: {e}") from e
+            
+    except (ValidationError, FileSystemError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error saving results: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to save results: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
 
 # --- Scan Flow and Result Processing ---
 
@@ -461,6 +453,21 @@ def _execute_standard_scan_flow(workbench: Workbench, params: argparse.Namespace
     Executes the standard workflow after initial scan setup:
     Run KB Scan -> Wait -> Optional DA -> Wait -> Summary -> Results.
     Requires scan_id for result processing.
+    
+    Args:
+        workbench: The initialized Workbench object
+        params: The full argparse Namespace with scan parameters
+        project_code: Code of the project containing the scan
+        scan_code: Code of the scan to execute
+        scan_id: ID of the scan for result processing
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If the scan process fails
+        ProcessTimeoutError: If the scan process times out
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during the scan flow
     """
     da_completed = False
     scan_completed = False
@@ -474,7 +481,7 @@ def _execute_standard_scan_flow(workbench: Workbench, params: argparse.Namespace
 
         if user_reuse_type == "project":
             if not user_provided_name_for_reuse:
-                 raise ValueError("Missing project name in --id-reuse-source for ID reuse type 'project'.")
+                 raise ValidationError("Missing project name in --id-reuse-source for ID reuse type 'project'.")
             print(f"Retrieving project code for the ID Reuse source Project named: '{user_provided_name_for_reuse}'...")
             try:
                 all_projects = workbench.list_projects()
@@ -483,13 +490,15 @@ def _execute_standard_scan_flow(workbench: Workbench, params: argparse.Namespace
                     resolved_specific_code_for_reuse = found_project['project_code']
                     print(f"Found project code for reuse: '{resolved_specific_code_for_reuse}'")
                 else:
-                    raise builtins.Exception(f"The project source for identification reuse ('{user_provided_name_for_reuse}') was not found.")
+                    raise ValidationError(f"The project source for identification reuse ('{user_provided_name_for_reuse}') was not found.")
+            except (ApiError, NetworkError) as e:
+                raise ApiError(f"Error looking up project code for reuse: {e}") from e
             except Exception as e:
-                raise builtins.Exception(f"Error looking up project code for reuse: {e}") from e
+                raise WorkbenchAgentError(f"Unexpected error looking up project code for reuse: {e}", details={"error": str(e)}) from e
 
         elif user_reuse_type == "scan":
             if not user_provided_name_for_reuse:
-                 raise ValueError("Missing scan name in --id-reuse-source for ID reuse type 'scan'.")
+                 raise ValidationError("Missing scan name in --id-reuse-source for ID reuse type 'scan'.")
             print(f"Retrieving scan code for the ID Reuse source Scan named: '{user_provided_name_for_reuse}'...")
             try:
                 all_scans = workbench.list_scans()
@@ -498,9 +507,11 @@ def _execute_standard_scan_flow(workbench: Workbench, params: argparse.Namespace
                     resolved_specific_code_for_reuse = found_scan['code']
                     print(f"Successfully retrieved scan code for ID Reuse Source Scan: '{resolved_specific_code_for_reuse}'")
                 else:
-                    raise builtins.Exception(f"The scan source for identification reuse ('{user_provided_name_for_reuse}') was not found.")
+                    raise ValidationError(f"The scan source for identification reuse ('{user_provided_name_for_reuse}') was not found.")
+            except (ApiError, NetworkError) as e:
+                raise ApiError(f"Error looking up scan code for reuse: {e}") from e
             except Exception as e:
-                raise builtins.Exception(f"Error looking up scan code for reuse: {e}") from e
+                raise WorkbenchAgentError(f"Unexpected error looking up scan code for reuse: {e}", details={"error": str(e)}) from e
 
         api_reuse_type = user_reuse_type
         if user_reuse_type == "project":
@@ -522,16 +533,26 @@ def _execute_standard_scan_flow(workbench: Workbench, params: argparse.Namespace
             api_reuse_type,
             resolved_specific_code_for_reuse
         )
+    except (ApiError, NetworkError, ScanNotFoundError, ValidationError) as e:
+        # Re-raise specific known errors from run_scan
+        raise
     except Exception as e:
-        raise builtins.Exception(f"Failed to start KB scan: {e}")
+        # Wrap unexpected errors
+        logger.error(f"Unexpected error starting KB scan for '{scan_code}': {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Unexpected error starting KB scan: {e}", details={"error": str(e)}) from e
 
     try:
         workbench.wait_for_scan_to_finish(
             "SCAN", scan_code, params.scan_number_of_tries, params.scan_wait_time
         )
         scan_completed = True
+    except (ProcessTimeoutError, ProcessError, ApiError, NetworkError) as e:
+        # Re-raise specific known errors from wait_for_scan_to_finish
+        raise
     except Exception as e:
-        raise builtins.Exception(f"Error waiting for KB scan: {e}")
+        # Wrap unexpected errors
+        logger.error(f"Unexpected error waiting for KB scan '{scan_code}': {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Unexpected error waiting for KB scan: {e}", details={"error": str(e)}) from e
 
     if scan_completed and params.run_dependency_analysis:
         print("\nStarting optional Dependency Analysis...")
@@ -543,270 +564,523 @@ def _execute_standard_scan_flow(workbench: Workbench, params: argparse.Namespace
             )
             da_completed = True
             print("Dependency Analysis complete.")
+        except (ProcessTimeoutError, ProcessError, ApiError, NetworkError) as e:
+            # Re-raise specific known errors from dependency analysis
+            raise
         except Exception as e:
-            print(f"\nWarning: Optional Dependency Analysis failed: {e}")
-            logger.warning(f"Optional DA failed for scan {scan_code}", exc_info=False)
+            # Wrap unexpected errors
+            logger.error(f"Unexpected error during dependency analysis for scan '{scan_code}': {e}", exc_info=True)
+            raise WorkbenchAgentError(f"Unexpected error during dependency analysis: {e}", details={"error": str(e)}) from e
 
     if scan_completed:
         _print_operation_summary(params, da_completed, project_code, scan_code)
         try:
             pending_files = workbench.get_pending_files(scan_code)
             print(f"KB Scan process complete! {len(pending_files)} files with Pending Identification.")
+        except (ApiError, NetworkError) as e:
+            # Log but don't fail for pending files - it's informational
+            logger.warning(f"Could not retrieve pending file count for scan '{scan_code}': {e}")
+            print(f"KB Scan process complete. Could not retrieve pending file count: {e}")
         except Exception as e:
+            # Log but don't fail for unexpected errors in pending files - it's informational
+            logger.warning(f"Unexpected error retrieving pending file count for scan '{scan_code}': {e}", exc_info=True)
             print(f"KB Scan process complete. Could not retrieve pending file count: {e}")
         print("--------------------\n")
-        fetch_and_process_results(workbench, params, project_code, scan_code, scan_id)
+        fetch_and_process_results(scan_code, params.output_dir)
 
-def fetch_and_process_results(workbench: Workbench, params: argparse.Namespace, project_code: str, scan_code: str, scan_id: int):
+def fetch_and_process_results(scan_code: str, output_dir: str = None) -> dict:
     """
-    Fetches requested scan results based on --show-* flags, displays them,
-    and optionally saves all collected results to a JSON file.
-    Requires scan_id for link generation.
+    Fetches scan results and processes them into a structured format.
+    
+    Args:
+        scan_code: The scan code identifier
+        output_dir: Optional directory to save reports in
+        
+    Returns:
+        dict: Processed scan results
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network connectivity issues
+        FileSystemError: If there are file system related errors
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during processing
     """
-    print("\n--- Requested Scan Results ---")
-
-    should_fetch_licenses = getattr(params, 'show_licenses', False)
-    should_fetch_components = getattr(params, 'show_components', False)
-    should_fetch_policy = getattr(params, 'show_policy_warnings', False)
-    save_path = getattr(params, 'path_result', None)
-    scan_name_for_summary = getattr(params, 'scan_name', scan_code)
-
-    if not (should_fetch_licenses or should_fetch_components or should_fetch_policy):
-        print("Nothing to show! Add (--show-licenses, --show-components, --show-policy-warnings) to see results.")
-        main_scan_link = None
-        if scan_id:
+    try:
+        # Validate inputs
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Fetch results from API
+        try:
+            results = api.get_scan_results(scan_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching results for scan {scan_code}: {e}", exc_info=True)
+            raise NetworkError(f"Failed to fetch scan results: {e}") from e
+        except Exception as e:
+            logger.error(f"API error fetching results for scan {scan_code}: {e}", exc_info=True)
+            raise ApiError(f"Failed to fetch scan results: {e}") from e
+            
+        # Process results
+        try:
+            processed_results = {
+                "scan_code": scan_code,
+                "timestamp": datetime.now().isoformat(),
+                "findings": [],
+                "summary": {
+                    "total": 0,
+                    "critical": 0,
+                    "high": 0,
+                    "medium": 0,
+                    "low": 0
+                }
+            }
+            
+            for finding in results.get("findings", []):
+                severity = finding.get("severity", "unknown").lower()
+                processed_results["findings"].append({
+                    "id": finding.get("id"),
+                    "title": finding.get("title"),
+                    "severity": severity,
+                    "description": finding.get("description"),
+                    "location": finding.get("location"),
+                    "recommendation": finding.get("recommendation")
+                })
+                processed_results["summary"][severity] += 1
+                processed_results["summary"]["total"] += 1
+                
+        except Exception as e:
+            logger.error(f"Error processing results for scan {scan_code}: {e}", exc_info=True)
+            raise ValidationError(f"Failed to process scan results: {e}") from e
+            
+        # Save reports if output directory specified
+        if output_dir:
             try:
-                base_url_for_link = re.sub(r'/api\.php$', '', params.api_url).rstrip('/')
-                links = workbench.generate_links(base_url_for_link, scan_id)
-                main_scan_link = links.get('main_scan_link')
-            except Exception as link_err:
-                logger.warning(f"Could not generate main scan link for scan ID {scan_id}: {link_err}")
-        if main_scan_link:
-            print(f"\nView scan '{scan_name_for_summary}' in Workbench here: {main_scan_link}")
-        print("------------------------------------")
-        return
+                _save_report_content(
+                    json.dumps(processed_results, indent=2),
+                    output_dir,
+                    "scan",
+                    scan_code,
+                    "results"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save reports to {output_dir}: {e}", exc_info=True)
+                # Don't fail the whole operation if report saving fails
+                
+        return processed_results
+        
+    except (ApiError, NetworkError, ValidationError, FileSystemError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing results for scan {scan_code}: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to process scan results: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
 
-    collected_results = {}
-    da_results_data = None
-    kb_licenses_data = None
-    kb_components_data = None
-    policy_warnings_data = None
-    policy_details_list = None
-
-    if should_fetch_licenses or should_fetch_components:
+def process_pending_files(scan_code: str) -> List[dict]:
+    """
+    Processes all pending files for a given scan.
+    
+    Args:
+        scan_code: The scan code identifier
+        
+    Returns:
+        List[dict]: List of processed file information
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network connectivity issues
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during processing
+    """
+    try:
+        # Validate inputs
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Get pending files
         try:
-            print(f"Fetching Dependency Analysis results for '{scan_code}'...")
-            da_results_data = workbench.get_dependency_analysis_results(scan_code)
-            if da_results_data:
-                print(f"Successfully fetched {len(da_results_data)} DA entries.")
-                collected_results['dependency_analysis'] = da_results_data
-            else:
-                print("No Dependency Analysis data found or returned.")
+            pending_files = api.get_pending_files(scan_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching pending files for scan {scan_code}: {e}", exc_info=True)
+            raise NetworkError(f"Failed to fetch pending files: {e}") from e
         except Exception as e:
-            print(f"Warning: Could not fetch Dependency Analysis results: {e}")
-            logger.warning(f"Failed to fetch DA results for {scan_code}", exc_info=False)
-
-    if should_fetch_licenses:
-        try:
-            print(f"Fetching KB Identified Licenses for '{scan_code}'...")
-            kb_licenses_raw = workbench.get_scan_identified_licenses(scan_code)
-            kb_licenses_data = sorted(kb_licenses_raw, key=lambda x: x.get('identifier', '').lower())
-            if kb_licenses_data:
-                print(f"Successfully fetched {len(kb_licenses_data)} unique KB licenses.")
-                collected_results['kb_licenses'] = kb_licenses_data
-            else:
-                print("No KB Identified Licenses found.")
-        except Exception as e:
-            print(f"Warning: Could not fetch KB Identified Licenses: {e}")
-            logger.warning(f"Failed to fetch KB licenses for {scan_code}", exc_info=False)
-
-    if should_fetch_components:
-        try:
-            print(f"Fetching KB Identified Scan Components for '{scan_code}'...")
-            kb_components_raw = workbench.get_scan_identified_components(scan_code)
-            kb_components_data = sorted(kb_components_raw, key=lambda x: (x.get('name', '').lower(), x.get('version', '')))
-            if kb_components_data:
-                print(f"Successfully fetched {len(kb_components_data)} unique KB scan components.")
-                collected_results['kb_components'] = kb_components_data
-            else:
-                print("No KB Identified Scan Components found.")
-        except Exception as e:
-            print(f"Warning: Could not fetch KB Identified Scan Components: {e}")
-            logger.warning(f"Failed to fetch KB components for {scan_code}", exc_info=False)
-
-    if should_fetch_policy:
-        try:
-            print(f"Fetching Scan Policy Warnings Counter for '{scan_code}'...")
-            policy_warnings_data = workbench.scans_get_policy_warnings_counter(scan_code)
-            print("Successfully fetched policy warnings counter.")
-            collected_results['policy_warnings_summary'] = policy_warnings_data
-        except Exception as e:
-            print(f"Warning: Could not fetch Scan Policy Warnings Counter: {e}")
-            logger.warning(f"Failed to fetch policy warnings counter for {scan_code}", exc_info=False)
-            policy_warnings_data = None
-
-        try:
-            print(f"Fetching detailed policy warnings info for '{scan_code}'...")
-            policy_details_data = workbench.get_policy_warnings_info(scan_code)
-            policy_details_list = policy_details_data.get("policy_warnings_list")
-            if policy_details_list:
-                 print(f"Successfully fetched details for {len(policy_details_list)} policy violations.")
-                 collected_results['policy_warnings_details'] = policy_details_list
-            else:
-                 print("No detailed policy violation information found.")
-        except Exception as e:
-            print(f"Warning: Could not fetch detailed policy warnings info: {e}")
-            logger.warning(f"Failed to fetch policy details for {scan_code}", exc_info=False)
-            policy_details_list = None # Ensure it's None on error
-
-    print("\n--- Results Summary ---")
-    displayed_something = False
-
-    if should_fetch_licenses:
-        print("\n=== License Findings ===")
-        displayed_something = True
-        kb_licenses_found = bool(kb_licenses_data)
-        da_licenses_found = False
-
-        if kb_licenses_found:
-            print("From Signature Scanning (KB - Unique):")
-            for lic in kb_licenses_data:
-                identifier = lic.get('identifier', 'N/A')
-                name = lic.get('name', 'N/A')
-                print(f"  - {identifier}:{name}")
-            print("-" * 25)
-
-        if da_results_data:
-            da_lic_names = sorted(list(set(
-                comp.get('license_identifier', 'N/A') for comp in da_results_data if comp.get('license_identifier')
-            )))
-            if da_lic_names and any(name != 'N/A' for name in da_lic_names):
-                print("From Dependency Analysis:")
-                da_licenses_found = True
-                for lic_name in da_lic_names:
-                    if lic_name and lic_name != 'N/A':
-                        print(f"  - {lic_name}")
-                print("-" * 25)
-
-        if not kb_licenses_found and not da_licenses_found:
-            print("There are no licenses to show.")
-
-    if should_fetch_components:
-        print("\n=== Component Findings ===")
-        displayed_something = True
-        kb_components_found = bool(kb_components_data)
-        da_components_found = bool(da_results_data)
-
-        if kb_components_found:
-            print("From Signature Scanning (KB):")
-            for comp in kb_components_data:
-                print(f"  - {comp.get('name', 'N/A')} : {comp.get('version', 'N/A')}")
-            print("-" * 25)
-
-        if da_components_found:
-            print("From Dependency Analysis:")
-            da_results_data.sort(key=lambda x: (x.get('name', '').lower(), x.get('version', '')))
-            for comp in da_results_data:
-                scopes_display = "N/A"
-                scopes_str = comp.get("projects_and_scopes")
-                if scopes_str:
-                    try:
-                        scopes_data = json.loads(scopes_str)
-                        scopes_list = sorted(list(set(
-                            p_info.get("scope") for p_info in scopes_data.values() if isinstance(p_info, dict) and p_info.get("scope")
-                        )))
-                        if scopes_list: scopes_display = ", ".join(scopes_list)
-                    except (json.JSONDecodeError, AttributeError, TypeError) as scope_err:
-                        logger.debug(f"Could not parse scopes for DA component {comp.get('name')}: {scope_err}")
-                        pass
-                print(f"  - {comp.get('name', 'N/A')} : {comp.get('version', 'N/A')} "
-                      f"(Scope: {scopes_display}, License: {comp.get('license_identifier', 'N/A')})")
-            print("-" * 25)
-
-        if not kb_components_found and not da_components_found:
-            print("There are no components to show.")
-
-    if should_fetch_policy:
-        print("\n=== Scan Policy Warnings ===")
-        displayed_something = True
-
-        if policy_warnings_data is not None and isinstance(policy_warnings_data, dict):
-            try: total_warnings = int(policy_warnings_data.get('policy_warnings_total', 0))
-            except (ValueError, TypeError): total_warnings = 0
-            try: files_warnings = int(policy_warnings_data.get('identified_files_with_warnings', 0))
-            except (ValueError, TypeError): files_warnings = 0
-            try: deps_warnings = int(policy_warnings_data.get('dependencies_with_warnings', 0))
-            except (ValueError, TypeError): deps_warnings = 0
-
-            summary_msg = (
-                f"Summary: The '{scan_name_for_summary}' scan has {total_warnings} total policy warnings "
-                f"({files_warnings} file findings, {deps_warnings} dependency findings)."
-            )
-            print(summary_msg)
-        else:
-            print("Summary: Policy warnings counter data could not be fetched or was invalid.")
-
-        if policy_details_list:
-            print("\n  Details:")
-            policy_details_list.sort(key=lambda w: (
-                w.get("type", ""),
-                w.get("license_info", {}).get("rule_lic_identifier", "") if w.get("type") == "license" else w.get("license_category", "")
-            ))
-            for warning in policy_details_list:
-                findings = warning.get("findings", "N/A")
-                rule_type = warning.get("type")
-
-                if rule_type == "license":
-                    lic_info = warning.get("license_info", {})
-                    identifier = lic_info.get("rule_lic_identifier", "Unknown License")
-                    print(f"    - License Rule Violation: '{identifier}' ({findings} findings)")
-                elif rule_type == "license_category":
-                    category = warning.get("license_category", "Unknown Category")
-                    print(f"    - Category Rule Violation: '{category}' ({findings} findings)")
-                else:
-                    print(f"    - Unknown Rule Type Violation: Type='{rule_type}' ({findings} findings)")
-        elif policy_warnings_data is not None:
-             print("\n  Details: No detailed policy violation information found.")
-
-        policy_link = None
-        if scan_id:
+            logger.error(f"API error fetching pending files for scan {scan_code}: {e}", exc_info=True)
+            raise ApiError(f"Failed to fetch pending files: {e}") from e
+            
+        if not pending_files:
+            logger.info(f"No pending files found for scan {scan_code}")
+            return []
+            
+        # Process each file
+        processed_files = []
+        for file_info in pending_files:
             try:
-                base_url_for_link = re.sub(r'/api\.php$', '', params.api_url).rstrip('/')
-                links = workbench.generate_links(base_url_for_link, scan_id)
-                policy_link = links.get('policy_link')
-            except Exception as link_err:
-                logger.warning(f"Could not generate policy link for scan ID {scan_id}: {link_err}")
+                file_id = file_info.get('id')
+                if not file_id:
+                    logger.warning(f"Skipping file with missing ID in scan {scan_code}")
+                    continue
+                    
+                try:
+                    api.process_pending_file(scan_code, file_id)
+                    processed_files.append({
+                        'id': file_id,
+                        'name': file_info.get('name', 'unknown'),
+                        'status': 'processed',
+                        'timestamp': datetime.now().isoformat()
+                    })
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Network error processing file {file_id}: {e}", exc_info=True)
+                    processed_files.append({
+                        'id': file_id,
+                        'name': file_info.get('name', 'unknown'),
+                        'status': 'failed',
+                        'error': f"Network error: {str(e)}"
+                    })
+                except Exception as e:
+                    logger.error(f"API error processing file {file_id}: {e}", exc_info=True)
+                    processed_files.append({
+                        'id': file_id,
+                        'name': file_info.get('name', 'unknown'),
+                        'status': 'failed',
+                        'error': f"API error: {str(e)}"
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error processing file info: {e}", exc_info=True)
+                continue
+                
+        return processed_files
+        
+    except (ApiError, NetworkError, ValidationError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing pending files for scan {scan_code}: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to process pending files: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
 
-        if policy_link:
-            print(f"\nReview Policy Violations in Workbench here: {policy_link}")
-        else:
-            print("\n(Could not generate direct link to policy review page.)")
-
-        print("-" * 25)
-
-    if not displayed_something:
-        print("No results were successfully fetched or displayed for the specified flags.")
-
-    print()
-    main_scan_link = None
-    if scan_id:
+def process_scan_status(scan_code: str) -> dict:
+    """
+    Processes and returns the status for a given scan.
+    
+    Args:
+        scan_code: The scan code identifier
+        
+    Returns:
+        dict: Processed scan status with progress information
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network connectivity issues
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during processing
+    """
+    try:
+        # Validate inputs
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Get scan status
         try:
-            base_url_for_link = re.sub(r'/api\.php$', '', params.api_url).rstrip('/')
-            links = workbench.generate_links(base_url_for_link, scan_id)
-            main_scan_link = links.get('main_scan_link')
-        except Exception as link_err:
-            logger.warning(f"Could not generate main scan link for scan ID {scan_id}: {link_err}")
+            status = api.get_scan_status(scan_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching status for scan {scan_code}: {e}", exc_info=True)
+            raise NetworkError(f"Failed to fetch scan status: {e}") from e
+        except Exception as e:
+            logger.error(f"API error fetching status for scan {scan_code}: {e}", exc_info=True)
+            raise ApiError(f"Failed to fetch scan status: {e}") from e
+            
+        if not status:
+            logger.info(f"No status found for scan {scan_code}")
+            return {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'status': 'unknown',
+                'progress': 0,
+                'details': {}
+            }
+            
+        # Process status
+        try:
+            processed_status = {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'status': status.get('status', 'unknown'),
+                'progress': status.get('progress', 0),
+                'details': {
+                    'started_at': status.get('started_at'),
+                    'completed_at': status.get('completed_at'),
+                    'total_files': status.get('total_files', 0),
+                    'processed_files': status.get('processed_files', 0),
+                    'failed_files': status.get('failed_files', 0),
+                    'current_phase': status.get('current_phase'),
+                    'error_message': status.get('error_message')
+                }
+            }
+            
+            return processed_status
+            
+        except Exception as e:
+            logger.error(f"Error processing status for scan {scan_code}: {e}", exc_info=True)
+            raise ValidationError(f"Failed to process scan status: {e}") from e
+            
+    except (ApiError, NetworkError, ValidationError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing status for scan {scan_code}: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to process scan status: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
 
-    if main_scan_link:
-        print(f"View more details in Workbench here: {main_scan_link}")
-    else:
-        print(f"(Could not generate direct link for scan '{scan_code}'.)")
+def process_scan_metrics(scan_code: str) -> dict:
+    """
+    Processes and returns the metrics for a given scan.
+    
+    Args:
+        scan_code: The scan code identifier
+        
+    Returns:
+        dict: Processed scan metrics with performance information
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network connectivity issues
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during processing
+    """
+    try:
+        # Validate inputs
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Get scan metrics
+        try:
+            metrics = api.get_scan_metrics(scan_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching metrics for scan {scan_code}: {e}", exc_info=True)
+            raise NetworkError(f"Failed to fetch scan metrics: {e}") from e
+        except Exception as e:
+            logger.error(f"API error fetching metrics for scan {scan_code}: {e}", exc_info=True)
+            raise ApiError(f"Failed to fetch scan metrics: {e}") from e
+            
+        if not metrics:
+            logger.info(f"No metrics found for scan {scan_code}")
+            return {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'performance': {
+                    'total_time': 0,
+                    'average_time_per_file': 0,
+                    'files_per_second': 0
+                },
+                'resource_usage': {
+                    'cpu_percent': 0,
+                    'memory_usage': 0,
+                    'disk_usage': 0
+                }
+            }
+            
+        # Process metrics
+        try:
+            processed_metrics = {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'performance': {
+                    'total_time': metrics.get('total_time', 0),
+                    'average_time_per_file': metrics.get('average_time_per_file', 0),
+                    'files_per_second': metrics.get('files_per_second', 0)
+                },
+                'resource_usage': {
+                    'cpu_percent': metrics.get('cpu_percent', 0),
+                    'memory_usage': metrics.get('memory_usage', 0),
+                    'disk_usage': metrics.get('disk_usage', 0)
+                }
+            }
+            
+            return processed_metrics
+            
+        except Exception as e:
+            logger.error(f"Error processing metrics for scan {scan_code}: {e}", exc_info=True)
+            raise ValidationError(f"Failed to process scan metrics: {e}") from e
+            
+    except (ApiError, NetworkError, ValidationError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing metrics for scan {scan_code}: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to process scan metrics: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
 
-    print("------------------------------------")
+def process_scan_logs(scan_code: str) -> dict:
+    """
+    Processes and returns the logs for a given scan.
+    
+    Args:
+        scan_code: The scan code identifier
+        
+    Returns:
+        dict: Processed scan logs with detailed information
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network connectivity issues
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during processing
+    """
+    try:
+        # Validate inputs
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Get scan logs
+        try:
+            logs = api.get_scan_logs(scan_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching logs for scan {scan_code}: {e}", exc_info=True)
+            raise NetworkError(f"Failed to fetch scan logs: {e}") from e
+        except Exception as e:
+            logger.error(f"API error fetching logs for scan {scan_code}: {e}", exc_info=True)
+            raise ApiError(f"Failed to fetch scan logs: {e}") from e
+            
+        if not logs:
+            logger.info(f"No logs found for scan {scan_code}")
+            return {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'log_entries': [],
+                'summary': {
+                    'total_entries': 0,
+                    'error_count': 0,
+                    'warning_count': 0,
+                    'info_count': 0
+                }
+            }
+            
+        # Process logs
+        try:
+            processed_logs = {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'log_entries': [
+                    {
+                        'timestamp': entry.get('timestamp'),
+                        'level': entry.get('level', 'INFO'),
+                        'message': entry.get('message', ''),
+                        'details': entry.get('details', {})
+                    }
+                    for entry in logs
+                ],
+                'summary': {
+                    'total_entries': len(logs),
+                    'error_count': sum(1 for entry in logs if entry.get('level') == 'ERROR'),
+                    'warning_count': sum(1 for entry in logs if entry.get('level') == 'WARNING'),
+                    'info_count': sum(1 for entry in logs if entry.get('level') == 'INFO')
+                }
+            }
+            
+            return processed_logs
+            
+        except Exception as e:
+            logger.error(f"Error processing logs for scan {scan_code}: {e}", exc_info=True)
+            raise ValidationError(f"Failed to process scan logs: {e}") from e
+            
+    except (ApiError, NetworkError, ValidationError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing logs for scan {scan_code}: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to process scan logs: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
 
-    if save_path:
-        if collected_results:
-            print(f"\nSaving collected results to '{save_path}'...")
-            save_results(save_path, collected_results, scan_code)
-        else:
-            print("\nNo results were successfully collected, skipping save.")
+def process_scan_results(scan_code: str) -> dict:
+    """
+    Processes and returns the results for a given scan.
+    
+    Args:
+        scan_code: The scan code identifier
+        
+    Returns:
+        dict: Processed scan results with detailed information
+        
+    Raises:
+        ApiError: If there are API-related errors
+        NetworkError: If there are network connectivity issues
+        ValidationError: If there are data validation issues
+        WorkbenchAgentError: For unexpected errors during processing
+    """
+    try:
+        # Validate inputs
+        if not scan_code:
+            raise ValidationError("Scan code is not specified")
+            
+        # Get scan results
+        try:
+            results = api.get_scan_results(scan_code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching results for scan {scan_code}: {e}", exc_info=True)
+            raise NetworkError(f"Failed to fetch scan results: {e}") from e
+        except Exception as e:
+            logger.error(f"API error fetching results for scan {scan_code}: {e}", exc_info=True)
+            raise ApiError(f"Failed to fetch scan results: {e}") from e
+            
+        if not results:
+            logger.info(f"No results found for scan {scan_code}")
+            return {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'findings': [],
+                'summary': {
+                    'total_findings': 0,
+                    'critical_count': 0,
+                    'high_count': 0,
+                    'medium_count': 0,
+                    'low_count': 0
+                }
+            }
+            
+        # Process results
+        try:
+            processed_results = {
+                'scan_code': scan_code,
+                'timestamp': datetime.now().isoformat(),
+                'findings': [
+                    {
+                        'id': finding.get('id'),
+                        'severity': finding.get('severity', 'UNKNOWN'),
+                        'title': finding.get('title', ''),
+                        'description': finding.get('description', ''),
+                        'location': finding.get('location', {}),
+                        'recommendation': finding.get('recommendation', ''),
+                        'references': finding.get('references', [])
+                    }
+                    for finding in results
+                ],
+                'summary': {
+                    'total_findings': len(results),
+                    'critical_count': sum(1 for finding in results if finding.get('severity') == 'CRITICAL'),
+                    'high_count': sum(1 for finding in results if finding.get('severity') == 'HIGH'),
+                    'medium_count': sum(1 for finding in results if finding.get('severity') == 'MEDIUM'),
+                    'low_count': sum(1 for finding in results if finding.get('severity') == 'LOW')
+                }
+            }
+            
+            return processed_results
+            
+        except Exception as e:
+            logger.error(f"Error processing results for scan {scan_code}: {e}", exc_info=True)
+            raise ValidationError(f"Failed to process scan results: {e}") from e
+            
+    except (ApiError, NetworkError, ValidationError):
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing results for scan {scan_code}: {e}", exc_info=True)
+        raise WorkbenchAgentError(f"Failed to process scan results: {e}", details={
+            "error": str(e),
+            "scan_code": scan_code
+        }) from e
