@@ -11,6 +11,22 @@ import tempfile
 import builtins
 from typing import Generator, Optional, Dict, Any, List, Union, Tuple
 
+from .exceptions import (
+    ApiError,
+    NetworkError,
+    AuthenticationError,
+    NotFoundError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ResourceExistsError,
+    ProjectExistsError,
+    ScanExistsError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError
+)
+
 # Assume logger is configured in main.py
 logger = logging.getLogger("log")
 
@@ -38,6 +54,11 @@ class Workbench:
         """
         Sends a POST request to the Workbench API.
         Handles expected non-JSON responses for synchronous operations.
+        
+        Raises:
+            NetworkError: For connection issues, timeouts, etc.
+            AuthenticationError: For authentication failures
+            ApiError: For API-level errors
         """
         headers = {
             "Accept": "*/*", # Keep broad accept for now
@@ -60,6 +81,11 @@ class Workbench:
             logger.debug("Response Headers: %s", response.headers)
             # Log first part of text regardless of JSON success/failure
             logger.debug(f"Response Text (first 500 chars): {response.text[:500] if hasattr(response, 'text') else '(No text)'}")
+            
+            # Handle authentication errors
+            if response.status_code == 401:
+                raise AuthenticationError("Invalid credentials or expired token")
+            
             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
 
             content_type = response.headers.get('content-type', '').lower()
@@ -92,8 +118,8 @@ class Workbench:
 
                         # --- Include is_invalid_type_probe in non-fatal check ---
                         if not (project_not_found or scan_not_found or project_already_exists or scan_already_exists or is_invalid_type_probe):
-                             logger.error(f"Unhandled API Error (status 0 JSON): {error_msg} | Payload: {payload}")
-                             raise builtins.Exception(f"API returned error: {error_msg}")
+                            logger.error(f"Unhandled API Error (status 0 JSON): {error_msg} | Payload: {payload}")
+                            raise ApiError(error_msg, code=parsed_json.get("code"))
                         # Return the status 0 JSON for expected non-fatal errors
 
                     return parsed_json # Return successfully parsed JSON (status 1 or expected status 0)
@@ -101,7 +127,7 @@ class Workbench:
                 except json.JSONDecodeError as e:
                     # Content-Type was JSON but decoding failed - this is an error
                     logger.error(f"Failed to decode JSON response despite Content-Type being JSON: {response.text[:500]}", exc_info=True)
-                    raise builtins.Exception(f"Invalid JSON received from API: {e.msg}. Response text: {response.text[:500]}...")
+                    raise ApiError(f"Invalid JSON received from API: {e.msg}", details={"response_text": response.text[:500]})
             else:
                 # Content-Type is NOT JSON. Assume it might be a direct synchronous response (like HTML report).
                 # Return the raw response object for the caller (generate_report) to handle.
@@ -109,9 +135,15 @@ class Workbench:
                 # Use a special key to indicate this isn't a normal parsed response
                 return {"_raw_response": response}
 
+        except requests.exceptions.ConnectionError as e:
+            logger.error("API connection failed: %s", e, exc_info=True)
+            raise NetworkError("Failed to connect to the API server", details={"error": str(e)})
+        except requests.exceptions.Timeout as e:
+            logger.error("API request timed out: %s", e, exc_info=True)
+            raise NetworkError("Request to API server timed out", details={"error": str(e)})
         except requests.exceptions.RequestException as e:
             logger.error("API request failed: %s", e, exc_info=True)
-            raise builtins.Exception(f"API request failed: {e}")
+            raise NetworkError(f"API request failed: {str(e)}", details={"error": str(e)})
 
     def _is_status_check_supported(self, scan_code: str, process_type: str) -> bool:
         """
@@ -327,89 +359,62 @@ class Workbench:
             raise Exception(error_msg)
 
     def upload_files(self, scan_code: str, path: str, is_da_import: bool = False):
-        """Uploads a file or directory (as zip) to a scan."""
+        """
+        Upload files to a scan, handling both single files and directories.
+        
+        Args:
+            scan_code: The code of the scan to upload to
+            path: Path to the file or directory to upload
+            is_da_import: Whether this is a dependency analysis import
+            
+        Raises:
+            FileSystemError: If the path doesn't exist or is not accessible
+            ApiError: If the upload fails due to API issues
+            NetworkError: If there are network issues during upload
+        """
         if not os.path.exists(path):
-             # Raise exception instead of sys.exit
-             raise FileNotFoundError(f"Path does not exist: {path}")
+            raise FileSystemError(f"Path does not exist: {path}")
 
-        archive_path = None
-        upload_path = path
-        original_basename = os.path.basename(path)
-
-        try:
-            if os.path.isdir(path):
-                print(f"Compressing target directory '{path}'...")
-                # Create the archive, append temp to the name.
-                base_name = os.path.join(tempfile.gettempdir(), f"{original_basename}_temp")
-                root_dir = os.path.dirname(path) or '.'
-                base_dir = original_basename
-                if not base_dir:
-                    raise ValueError(f"Cannot archive directory '{path}'")
-                archive_path = shutil.make_archive(base_name, 'zip', root_dir=root_dir, base_dir=base_dir)
-                upload_path = archive_path
-                print(f"Archive creation complete! Saved to {os.path.basename(archive_path)}")
-
-            file_size = os.path.getsize(upload_path)
-            size_limit = 16 * 1024 * 1024 # Increased limit slightly, adjust as needed
-            upload_basename = os.path.basename(upload_path)
-
-            name_b64 = base64.b64encode(upload_basename.encode()).decode("utf-8")
-            scan_code_b64 = base64.b64encode(scan_code.encode()).decode("utf-8")
-
-            headers = {
-                "FOSSID-SCAN-CODE": scan_code_b64,
-                "FOSSID-FILE-NAME": name_b64
-            }
-
-            if is_da_import:
-                headers["FOSSID-UPLOAD-TYPE"] = "dependency_analysis"
-                print(f"Uploading DA results file '{upload_basename}' ({file_size} bytes)...")
-            else:
-                 print(f"Uploading '{upload_basename}' ({file_size} bytes)...")
-
-            logger.debug(f"Upload Request Headers: {headers}")
-
-            with open(upload_path, "rb") as file:
-                if file_size > size_limit:
-                    print(f"File size exceeds limit ({size_limit} bytes). Using chunked upload...")
-                    headers['Transfer-Encoding'] = 'chunked'
-                    headers['Content-Type'] = 'application/octet-stream' # Required for chunked
-
-                    for i, chunk in enumerate(self._read_in_chunks(file)):
-                        logger.debug(f"Uploading chunk {i+1}...")
-                        self._chunked_upload_request(scan_code, headers, chunk)
-                    print("Chunked upload completed successfully.")
-                else:
-                    # Standard upload for smaller files
-                    resp = self.session.post(
-                        self.api_url,
-                        headers=headers,
-                        data=file,
-                        auth=(self.api_user, self.api_token), # Auth needed for direct upload
-                        timeout=1800,
-                    )
-                    logger.debug(f"Upload Response Status: {resp.status_code}")
-                    logger.debug(f"Upload Response Text: {resp.text}")
-                    resp.raise_for_status() # Check for HTTP errors
-                    print(f"Upload for '{upload_basename}' completed.")
-
-        except IOError as e:
-            # Raise exception instead of sys.exit
-            raise builtins.Exception(f"Error accessing file/directory for upload: {path}. Error: {e}") from e
-        except requests.exceptions.RequestException as e:
-            # Raise exception instead of sys.exit
-            raise builtins.Exception(f"Failed to upload {upload_path} to scan {scan_code}. Error: {e}") from e
-        except Exception as e:
-            # Raise exception instead of sys.exit
-            raise builtins.Exception(f"Unexpected error during file upload: {e}") from e
-        finally:
-            # Clean up temporary archive
-            if archive_path and os.path.exists(archive_path):
+        if os.path.isfile(path):
+            # Single file upload
+            try:
+                with open(path, 'rb') as f:
+                    self._chunked_upload_request(scan_code, {
+                        "Content-Type": "application/octet-stream",
+                        "Content-Disposition": f'attachment; filename="{os.path.basename(path)}"'
+                    }, f.read())
+            except IOError as e:
+                raise FileSystemError(f"Error accessing file for upload: {path}", details={"error": str(e)})
+            except Exception as e:
+                raise ApiError(f"Failed to upload file {path}", details={"error": str(e)})
+        else:
+            # Directory upload - create a temporary archive
+            try:
+                with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_file:
+                    temp_path = temp_file.name
+                    shutil.make_archive(temp_path[:-4], 'zip', path)
+                    
+                    # Upload the archive
+                    with open(temp_path, 'rb') as f:
+                        self._chunked_upload_request(scan_code, {
+                            "Content-Type": "application/zip",
+                            "Content-Disposition": 'attachment; filename="archive.zip"'
+                        }, f.read())
+            except OSError as e:
+                raise FileSystemError(f"Error creating archive for directory: {path}", details={"error": str(e)})
+            except IOError as e:
+                raise FileSystemError(f"Error accessing archive for upload: {path}", details={"error": str(e)})
+            except Exception as e:
+                raise ApiError(f"Failed to upload directory {path}", details={"error": str(e)})
+            finally:
+                # Clean up temporary files
                 try:
-                    os.remove(archive_path)
-                    logger.info(f"Removed temporary archive: {archive_path}")
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                    if os.path.exists(temp_path[:-4] + '.zip'):
+                        os.unlink(temp_path[:-4] + '.zip')
                 except OSError as e:
-                    logger.warning(f"Could not remove temporary archive {archive_path}: {e}")
+                    logger.warning(f"Failed to clean up temporary files: {e}")
 
     def get_scan_status(self, scan_type: str, scan_code: str) -> dict:
         """Retrieves the status of a scan operation (SCAN or DEPENDENCY_ANALYSIS)."""
@@ -460,70 +465,91 @@ class Workbench:
         self,
         scan_code: str,
         scan_number_of_tries: int,
-        scan_wait_time: int, # Note: scan_wait_time is passed but 5s is hardcoded below
+        scan_wait_time: int,
     ):
-        """Waits for the EXTRACT_ARCHIVES operation to complete."""
-        process_description = f"Archive Extraction for scan '{scan_code}'"
-        logger.info(f"Waiting for {process_description} to complete...")
+        """
+        Wait for archive extraction to complete.
+        
+        Args:
+            scan_code: The code of the scan to check
+            scan_number_of_tries: Maximum number of attempts
+            scan_wait_time: Time to wait between attempts
+            
+        Raises:
+            ProcessTimeoutError: If the process times out
+            ProcessError: If the process fails
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
+        def status_accessor(data):
+            try:
+                return data.get("progress_state", "UNKNOWN")
+            except (ValueError, TypeError):
+                return "ACCESS_ERROR"
 
-        # Use _send_request directly as the check function
-        # The status accessor needs to handle the full response structure
-        self._wait_for_process(
-            process_description=process_description,
-            check_function=self._send_request,
-            check_args={
-                "payload": {
-                    "group": "scans",
-                    "action": "check_status",
-                    "data": {
-                        "scan_code": scan_code,
-                        "type": "EXTRACT_ARCHIVES" # Use the specific type
-                    }
-                }
-            },
-            # Access status within the 'data' part of the response
-            status_accessor=lambda response: response.get("data", {}).get("status", "UNKNOWN"),
-            success_values={"FINISHED"},
-            failure_values={"FAILED", "CANCELLED"}, # Add CANCELLED just in case
-            max_tries=scan_number_of_tries,
-            wait_interval=5, # Use a potentially shorter interval for extraction? 5s?
-            progress_indicator=True
-        )
-
+        try:
+            return self._wait_for_process(
+                "Archive extraction",
+                self.get_scan_status,
+                {"scan_type": "EXTRACT_ARCHIVES", "scan_code": scan_code},
+                status_accessor,
+                {"FINISHED"},
+                {"FAILED", "CANCELLED", "ACCESS_ERROR"},
+                scan_number_of_tries,
+                scan_wait_time
+            )
+        except ProcessTimeoutError as e:
+            raise ProcessTimeoutError(f"Timeout waiting for archive extraction on scan {scan_code}", details=e.details)
+        except ProcessError as e:
+            raise ProcessError(f"Archive extraction failed for scan {scan_code}", details=e.details)
+        except Exception as e:
+            raise ApiError(f"Error during archive extraction: {str(e)}", details={"scan_code": scan_code})
 
     def wait_for_scan_to_finish(
         self,
-        scan_type: str, # "SCAN" or "DEPENDENCY_ANALYSIS"
+        scan_type: str,
         scan_code: str,
         scan_number_of_tries: int,
         scan_wait_time: int,
     ):
-        """Waits for a SCAN or DEPENDENCY_ANALYSIS operation to complete using the generic waiter."""
-        scan_type_upper = scan_type.upper()
-        process_description = f"{scan_type_upper} operation for scan '{scan_code}'"
-
-        # Define how to get status for SCAN/DA
+        """
+        Wait for a scan to complete.
+        
+        Args:
+            scan_type: Type of scan ("SCAN" or "DEPENDENCY_ANALYSIS")
+            scan_code: Code of the scan to check
+            scan_number_of_tries: Maximum number of attempts
+            scan_wait_time: Time to wait between attempts
+            
+        Raises:
+            ProcessTimeoutError: If the process times out
+            ProcessError: If the process fails
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
         def status_accessor(data):
-            status_val = data.get("status", "UNKNOWN") # Use hardcoded default
-            is_finished_flag = data.get("is_finished")
-            # Handle both boolean True and string "1" for is_finished
-            is_finished = str(is_finished_flag).lower() == "true" or str(is_finished_flag) == "1"
-            # Use hardcoded strings for comparison
-            if is_finished and status_val not in ["FAILED", "CANCELLED"]:
-                return "FINISHED" # Use hardcoded string
-            return status_val
+            try:
+                return data.get("progress_state", "UNKNOWN")
+            except (ValueError, TypeError):
+                return "ACCESS_ERROR"
 
-        self._wait_for_process(
-            process_description=process_description,
-            check_function=self.get_scan_status,
-            check_args={"scan_type": scan_type_upper, "scan_code": scan_code},
-            status_accessor=status_accessor,
-            success_values={"FINISHED"}, # Use hardcoded string
-            failure_values={"FAILED", "CANCELLED"}, # Use hardcoded strings
-            max_tries=scan_number_of_tries,
-            wait_interval=scan_wait_time,
-            progress_indicator=True
-        )
+        try:
+            return self._wait_for_process(
+                f"{scan_type} scan",
+                self.get_scan_status,
+                {"scan_type": scan_type, "scan_code": scan_code},
+                status_accessor,
+                {"FINISHED"},
+                {"FAILED", "CANCELLED", "ACCESS_ERROR"},
+                scan_number_of_tries,
+                scan_wait_time
+            )
+        except ProcessTimeoutError as e:
+            raise ProcessTimeoutError(f"Timeout waiting for {scan_type} scan {scan_code}", details=e.details)
+        except ProcessError as e:
+            raise ProcessError(f"{scan_type} scan failed for {scan_code}", details=e.details)
+        except Exception as e:
+            raise ApiError(f"Error during {scan_type} scan: {str(e)}", details={"scan_code": scan_code})
 
     def get_pending_files(self, scan_code: str) -> Dict[str, str]:
         """Retrieves pending files for a scan."""
@@ -819,50 +845,52 @@ class Workbench:
                  raise builtins.Exception(f"Failed to list scans for project '{project_code}': {error_msg}")
 
     def create_project(self, project_name: str) -> str:
-        """Creates a new project using project_name. Returns the assigned project_code."""
-        logger.info(f"Attempting to create the '{project_name}' project...")
-        payload = {
-            "group": "projects",
-            "action": "create",
-            "data": {
-                "project_name": project_name,
-                "description": f"Project created by Workbench Agent.",
-            },
-        }
+        """
+        Create a new project in Workbench.
+        
+        Args:
+            project_name: Name of the project to create
+            
+        Returns:
+            The project code of the created project
+            
+        Raises:
+            ProjectExistsError: If a project with this name already exists
+            ApiError: If project creation fails
+            NetworkError: If there are network issues
+        """
         try:
+            # First check if project exists
+            projects = self.list_projects()
+            for project in projects:
+                if project.get("name") == project_name:
+                    raise ProjectExistsError(f"Project '{project_name}' already exists")
+
+            # Create the project
+            payload = {
+                "group": "projects",
+                "action": "create",
+                "data": {
+                    "name": project_name,
+                }
+            }
             response = self._send_request(payload)
-            # API returns assigned code on success
-            if response.get("status") == "1" and "data" in response and "project_code" in response["data"]:
-                 assigned_code = response["data"]["project_code"]
-                 print(f"Successfully created the '{project_name}' project with code '{assigned_code}'")
-                 return assigned_code
-            # Handle "already exists" - find the existing code by name
-            elif response.get("status") == "0" and "Project code already exists" in response.get("error", ""):
-                 logger.warning(f"Project creation failed (name/code clash for '{project_name}'). Finding existing.")
-                 all_projects = self.list_projects()
-                 found_project = next((p for p in all_projects if p.get('project_name') == project_name), None)
-                 if found_project and 'project_code' in found_project:
-                      print(f"Project '{project_name}' already exists with code '{found_project['project_code']}'.")
-                      return found_project['project_code']
-                 else:
-                      raise builtins.Exception(f"Failed to create project '{project_name}' and could not find existing project by name after clash.")
+            
+            if response.get("status") == "1":
+                project_code = response.get("data", {}).get("code")
+                if not project_code:
+                    raise ApiError("Project created but no code returned", details=response)
+                return project_code
             else:
-                 error_msg = response.get("error", f"Unexpected response: {response}")
-                 raise builtins.Exception(f"Failed to create project '{project_name}': {error_msg}")
+                error_msg = response.get("error", "Unknown error")
+                raise ApiError(f"Failed to create project '{project_name}': {error_msg}", details=response)
+                
+        except ProjectExistsError:
+            raise
         except Exception as e:
-             # Catch errors from _send_request or logic above, retry finding on "exists" error
-             if "Project code already exists" in str(e):
-                 logger.warning(f"Project creation failed (name/code clash for '{project_name}'). Finding existing.")
-                 all_projects = self.list_projects()
-                 found_project = next((p for p in all_projects if p.get('project_name') == project_name), None)
-                 if found_project and 'project_code' in found_project:
-                      print(f"Project '{project_name}' already exists with code '{found_project['project_code']}'.")
-                      return found_project['project_code']
-                 else:
-                      raise builtins.Exception(f"Failed to create project '{project_name}' and could not find existing project by name after error: {e}")
-             else:
-                 # Ensure other exceptions are re-raised clearly
-                 raise builtins.Exception(f"Failed to create project '{project_name}': {e}") from e
+            if isinstance(e, ApiError):
+                raise
+            raise ApiError(f"Failed to create project '{project_name}'", details={"error": str(e)})
 
     def create_webapp_scan(
             self,
@@ -872,72 +900,71 @@ class Workbench:
             git_branch: Optional[str] = None,
             git_tag: Optional[str] = None,
             git_depth: Optional[int] = None
-        ) -> bool: # Returns True on success trigger
-        """Creates a new scan inside a project. Returns True if successful."""
-        logger.info(f"Attempting to create the '{scan_name}' scan inside the '{project_code}' project...")
-        payload_data = {
-            "scan_name": scan_name,
-            "project_code": project_code,
-            "description": f"Scan created by Workbench Agent.",
-        }
-
-        git_ref_value = None
-        git_ref_type = None
-
-        if git_tag:
-            git_ref_value = git_tag
-            git_ref_type = "tag"
-            logger.info(f"  Including Git Tag: {git_tag}")
-        elif git_branch:
-            git_ref_value = git_branch
-            git_ref_type = "branch"
-            logger.info(f"  Including Git Branch: {git_branch}")
-
-        if git_url:
-            payload_data["git_repo_url"] = git_url
-            logger.info(f"Including Git URL: {git_url}")
-        if git_ref_value:
-            # API uses 'git_branch' field for both branch and tag names
-            payload_data["git_branch"] = git_ref_value
-        if git_ref_type:
-            payload_data["git_ref_type"] = git_ref_type
-            logger.info(f"Setting Git Ref Type to: {git_ref_type}")
-        if git_depth is not None:
-            payload_data["git_depth"] = str(git_depth) # API expects string according to schema example
-            logger.info(f"Setting Git Clone Depth to: {git_depth}")
-            # Ensure ref type is set if depth is used (API requirement)
-            if not git_ref_type:
-                 logger.warning("Git depth specified, but no branch or tag provided. Setting ref type to 'branch' as a default.")
-                 payload_data["git_ref_type"] = "branch"
-
-        payload = {
-            "group": "scans", 
-            "action": "create",
-            "data": payload_data,
-        }
-
+        ) -> bool:
+        """
+        Create a new webapp scan in Workbench.
+        
+        Args:
+            scan_name: Name of the scan to create
+            project_code: Code of the project to create the scan in
+            git_url: Optional Git repository URL
+            git_branch: Optional Git branch to scan
+            git_tag: Optional Git tag to scan
+            git_depth: Optional Git clone depth
+            
+        Returns:
+            True if scan creation was successful
+            
+        Raises:
+            ScanExistsError: If a scan with this name already exists
+            ProjectNotFoundError: If the project doesn't exist
+            ApiError: If scan creation fails
+            NetworkError: If there are network issues
+        """
         try:
+            # First check if scan exists
+            scans = self.get_project_scans(project_code)
+            for scan in scans:
+                if scan.get("name") == scan_name:
+                    raise ScanExistsError(f"Scan '{scan_name}' already exists in project '{project_code}'")
+
+            # Prepare the payload
+            payload = {
+                "group": "scans",
+                "action": "create",
+                "data": {
+                    "name": scan_name,
+                    "project_code": project_code,
+                    "type": "webapp"
+                }
+            }
+
+            # Add Git parameters if provided
+            if git_url:
+                payload["data"]["git_url"] = git_url
+                if git_branch:
+                    payload["data"]["git_branch"] = git_branch
+                if git_tag:
+                    payload["data"]["git_tag"] = git_tag
+                if git_depth:
+                    payload["data"]["git_depth"] = git_depth
+
             response = self._send_request(payload)
-            # API returns scan_id, not scan_code
-            if response.get("status") == "1" and "data" in response and "scan_id" in response["data"]:
-                 scan_id = response["data"]["scan_id"]
-                 print(f"Successfully created the '{scan_name}' scan (ID: {scan_id}).")
-                 return True
-            # Handle "already exists" - return False to signal it existed
-            elif response.get("status") == "0" and \
-               ("Scan code already exists" in response.get("error", "") or "Legacy.controller.scans.code_already_exists" in response.get("error", "")):
-                 logger.warning(f"Scan creation skipped: Scan with name/code '{scan_name}' likely already exists in project '{project_code}'.")
-                 return False # Signal that it already existed (or clashed)
+            
+            if response.get("status") == "1":
+                return True
             else:
-                error_msg = response.get("error", f"Unexpected response: {response}")
-                raise builtins.Exception(f"Failed to trigger creation for scan '{scan_name}': {error_msg}")
+                error_msg = response.get("error", "Unknown error")
+                if "Project does not exist" in error_msg:
+                    raise ProjectNotFoundError(f"Project '{project_code}' not found")
+                raise ApiError(f"Failed to create scan '{scan_name}': {error_msg}", details=response)
+                
+        except (ScanExistsError, ProjectNotFoundError):
+            raise
         except Exception as e:
-             if "Scan code already exists" in str(e) or "Legacy.controller.scans.code_already_exists" in str(e):
-                 logger.warning(f"Scan creation skipped: Scan with name/code '{scan_name}' likely already exists in project '{project_code}'.")
-                 return False
-             else:
-                 logger.error(f"Unexpected error during scan creation trigger for '{scan_name}': {e}", exc_info=True)
-                 raise builtins.Exception(f"Failed to trigger creation for scan '{scan_name}': {e}") from e
+            if isinstance(e, ApiError):
+                raise
+            raise ApiError(f"Failed to create scan '{scan_name}'", details={"error": str(e)})
 
     def run_scan(
         self,
@@ -949,47 +976,74 @@ class Workbench:
         autoid_pending_ids: bool,
         delta_scan: bool,
         id_reuse: bool,
-        id_reuse_type: Optional[str] = None, # This will receive the *translated* API value
+        id_reuse_type: Optional[str] = None,
         id_reuse_source: Optional[str] = None,
     ):
-        """Starts a Signature / License Extractor scan with specified parameters."""
-        self.assert_scan_can_start(scan_code)
-        print(f"Starting KB scan for '{scan_code}' with specified parameters...")
-        payload = {
-            "group": "scans",
-            "action": "run",
-            "data": {
-                "scan_code": scan_code,
-                "limit": limit,
-                "sensitivity": sensitivity,
-                # API expects integer 0 or 1 for boolean flags
-                "auto_identification_detect_declaration": int(autoid_file_licenses),
-                "auto_identification_detect_copyright": int(autoid_file_copyrights),
-                "auto_identification_resolve_pending_ids": int(autoid_pending_ids),
-                "delta_only": int(delta_scan),
-            },
-        }
-        if id_reuse:
-            data = payload["data"]
-            data["reuse_identification"] = "1" # API expects string "1"
-            if id_reuse_type: # Use the translated value passed in
-                 data["identification_reuse_type"] = id_reuse_type
-                 # Check API-specific values here
-                 if id_reuse_type in {"specific_project", "specific_scan"}:
-                     if not id_reuse_source:
-                          # This should be caught by argparse/caller, but double-check
-                          raise ValueError(f"--id-reuse-source is required when --id-reuse-type is '{id_reuse_type}' (API value)")
-                     data["specific_code"] = id_reuse_source
-            else:
-                 # Default reuse type is usually 'any' if not specified, but log a warning
-                 print("Warning: --id-reuse is set, but --id-reuse-type is not specified. Workbench will reuse ANY identification.")
+        """
+        Run a scan with the specified parameters.
+        
+        Args:
+            scan_code: Code of the scan to run
+            limit: Scan limit
+            sensitivity: Scan sensitivity
+            autoid_file_licenses: Whether to auto-identify file licenses
+            autoid_file_copyrights: Whether to auto-identify file copyrights
+            autoid_pending_ids: Whether to auto-identify pending IDs
+            delta_scan: Whether this is a delta scan
+            id_reuse: Whether to reuse identifications
+            id_reuse_type: Type of identification reuse
+            id_reuse_source: Source for identification reuse
+            
+        Raises:
+            ValidationError: If required parameters are missing
+            ScanNotFoundError: If the scan doesn't exist
+            ApiError: If scan execution fails
+            NetworkError: If there are network issues
+        """
+        try:
+            # Validate parameters
+            if id_reuse and not id_reuse_type:
+                raise ValidationError("id_reuse_type is required when id_reuse is True")
+            if id_reuse and not id_reuse_source:
+                raise ValidationError("id_reuse_source is required when id_reuse is True")
 
-        response = self._send_request(payload)
-        if response.get("status") == "1":
-            print(f"KB Scan initiated for scan '{scan_code}'.")
-            return response # Return the response which might contain job ID etc.
-        else:
-            raise builtins.Exception(f"Failed to start KB scan '{scan_code}' (see logs).")
+            # Prepare the payload
+            payload = {
+                "group": "scans",
+                "action": "run",
+                "data": {
+                    "scan_code": scan_code,
+                    "limit": limit,
+                    "sensitivity": sensitivity,
+                    "autoid_file_licenses": "1" if autoid_file_licenses else "0",
+                    "autoid_file_copyrights": "1" if autoid_file_copyrights else "0",
+                    "autoid_pending_ids": "1" if autoid_pending_ids else "0",
+                    "delta_scan": "1" if delta_scan else "0",
+                    "id_reuse": "1" if id_reuse else "0",
+                }
+            }
+
+            # Add ID reuse parameters if enabled
+            if id_reuse:
+                payload["data"]["id_reuse_type"] = id_reuse_type
+                payload["data"]["id_reuse_source"] = id_reuse_source
+
+            response = self._send_request(payload)
+            
+            if response.get("status") == "1":
+                return
+            else:
+                error_msg = response.get("error", "Unknown error")
+                if "Scan not found" in error_msg:
+                    raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+                raise ApiError(f"Failed to run scan '{scan_code}': {error_msg}", details=response)
+                
+        except (ValidationError, ScanNotFoundError):
+            raise
+        except Exception as e:
+            if isinstance(e, ApiError):
+                raise
+            raise ApiError(f"Failed to run scan '{scan_code}'", details={"error": str(e)})
 
     def get_policy_violations(self, scan_code: str) -> List[Dict[str, Any]]:
         """ Retrieves policy violations for a scan. """

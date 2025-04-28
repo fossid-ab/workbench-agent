@@ -6,9 +6,26 @@ import sys
 import re
 import logging
 from argparse import RawTextHelpFormatter
+from typing import Optional, Dict, Any, List, Union, Tuple
 
 # Import Workbench to access report type constants
 from .api import Workbench
+from .exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ConfigurationError,
+    AuthenticationError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError,
+    CompatibilityError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError
+)
 
 logger = logging.getLogger(__name__)
 
@@ -281,3 +298,71 @@ Example Usage:
         # If scope is scan, project-name is optional.
 
     return args
+
+def main() -> int:
+    """
+    Main entry point for the CLI.
+    
+    Returns:
+        int: Exit code (0 for success, non-zero for failure)
+        
+    Raises:
+        WorkbenchAgentError: For any unhandled errors
+    """
+    try:
+        args = parse_cmdline_args()
+        
+        # Initialize Workbench client
+        workbench = Workbench(args.api_url, args.api_token)
+        
+        # Import handlers
+        from .handlers import (
+            handle_scan,
+            handle_scan_git,
+            handle_import_da,
+            handle_show_results,
+            handle_download_reports,
+            handle_evaluate_gates
+        )
+        
+        # Execute command
+        if args.command == "scan":
+            handle_scan(workbench, args)
+        elif args.command == "scan-git":
+            handle_scan_git(workbench, args)
+        elif args.command == "import-da":
+            handle_import_da(workbench, args)
+        elif args.command == "show-results":
+            handle_show_results(workbench, args)
+        elif args.command == "download-reports":
+            handle_download_reports(workbench, args)
+        elif args.command == "evaluate-gates":
+            handle_evaluate_gates(workbench, args)
+        else:
+            raise ValidationError(f"Unknown command: {args.command}")
+        
+        return 0
+    except (ValidationError, ConfigurationError, AuthenticationError, 
+            ProjectNotFoundError, ScanNotFoundError, ProjectExistsError, 
+            ScanExistsError) as e:
+        # These are user-facing errors that should be displayed nicely
+        print(f"Error: {str(e)}")
+        if e.details:
+            print(f"Details: {e.details}")
+        return 1
+    except (ApiError, NetworkError, ProcessError, ProcessTimeoutError, 
+            FileSystemError, CompatibilityError) as e:
+        # These are technical errors that should be logged
+        logger.error(f"Technical error: {str(e)}")
+        if e.details:
+            logger.error(f"Details: {e.details}")
+        print(f"Error: {str(e)}")
+        return 1
+    except Exception as e:
+        # These are unexpected errors that should be logged and displayed
+        logger.error("Unexpected error", exc_info=True)
+        print(f"Unexpected error: {str(e)}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

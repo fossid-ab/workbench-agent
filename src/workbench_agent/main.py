@@ -4,15 +4,24 @@ import sys
 import time
 import logging
 import argparse
-import builtins # Still needed as exceptions weren't refactored yet
+from typing import Optional
 
 # Import components from other modules in the package
 from .cli import parse_cmdline_args
 from .api import Workbench
-# Import the handlers module itself to access functions via handlers.handle_scan etc.
 from . import handlers
-# Import specific exceptions if you defined them (e.g., from .exceptions import ApiError, ...)
-# If not using custom exceptions yet, the generic except block will catch builtins.Exception
+from .exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ConfigurationError,
+    AuthenticationError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError,
+    CompatibilityError
+)
 
 # --- Main Application Logic ---
 
@@ -64,12 +73,18 @@ def main() -> int:
         try:
             workbench = Workbench(params.api_url, params.api_user, params.api_token)
             logger.info("Workbench client initialized.")
+        except AuthenticationError as e:
+            print(f"\nAuthentication Error: {e.message}")
+            logger.error("Failed to authenticate with Workbench", exc_info=True)
+            return 1
+        except NetworkError as e:
+            print(f"\nNetwork Error: {e.message}")
+            logger.error("Failed to connect to Workbench", exc_info=True)
+            return 1
         except Exception as e:
-             # Handle initialization errors separately
-             print(f"\nError initializing Workbench connection: {e}")
-             logger.critical("Failed to initialize Workbench connection", exc_info=True)
-             # No need to calculate duration here, finally block will handle it
-             return 1 # Return failure code
+            print(f"\nError initializing Workbench connection: {e}")
+            logger.critical("Failed to initialize Workbench connection", exc_info=True)
+            return 1
 
         # --- Command Dispatch ---
         COMMAND_HANDLERS = {
@@ -108,33 +123,46 @@ def main() -> int:
             exit_code = 1 # Failure
 
     # --- Unified Exception Handling ---
-    # Catch specific custom exceptions first if defined (e.g., ApiError, CompatibilityError)
-    # except (ApiError, NetworkError) as e:
-    #     print(f"\n--- API or Network Error ---")
-    #     logger.error(f"Script failed: {e}", exc_info=True)
-    #     print(f"Error: {e}")
-    #     print("----------------------------")
-    #     exit_code = 1
-    # except CompatibilityError as e:
-    #      print(f"\n--- Compatibility Error ---")
-    #      logger.error(f"Script failed: {e}", exc_info=False) # No traceback needed usually
-    #      print(f"Error: {e}")
-    #      print("----------------------------")
-    #      exit_code = 1 # Or a specific code like 2
-    except builtins.Exception as e: # Catch generic exceptions raised by handlers/utils
-        print(f"\n--- An error occurred during execution ---")
-        # Log the specific error message raised by the handlers/waiters
-        # Include traceback in log for debugging runtime errors
-        logger.error(f"Script failed during command '{getattr(params, 'command', 'N/A')}': {e}", exc_info=True)
-        print(f"Error: {e}") # Print the concise error message to console
-        print("------------------------------------")
-        exit_code = 1 # General failure
-    except Exception as e: # Catch any other unexpected errors (e.g., during setup)
-        print(f"\n--- An unexpected critical error occurred ---")
-        logger.critical(f"Script failed with unexpected error: {e}", exc_info=True)
-        print(f"Unexpected Error: {e}")
-        print("------------------------------------")
-        exit_code = 1 # General failure
+    except ConfigurationError as e:
+        print(f"\nConfiguration Error: {e.message}")
+        logger.error(f"Configuration error: {e.message}", exc_info=False)
+        exit_code = 1
+    except ValidationError as e:
+        print(f"\nValidation Error: {e.message}")
+        logger.error(f"Validation error: {e.message}", exc_info=False)
+        exit_code = 1
+    except ApiError as e:
+        print(f"\nAPI Error: {e.message}")
+        logger.error(f"API error: {e.message}", exc_info=True)
+        exit_code = 1
+    except NetworkError as e:
+        print(f"\nNetwork Error: {e.message}")
+        logger.error(f"Network error: {e.message}", exc_info=True)
+        exit_code = 1
+    except ProcessError as e:
+        print(f"\nProcess Error: {e.message}")
+        logger.error(f"Process error: {e.message}", exc_info=True)
+        exit_code = 1
+    except ProcessTimeoutError as e:
+        print(f"\nProcess Timeout: {e.message}")
+        logger.error(f"Process timeout: {e.message}", exc_info=True)
+        exit_code = 1
+    except FileSystemError as e:
+        print(f"\nFile System Error: {e.message}")
+        logger.error(f"File system error: {e.message}", exc_info=True)
+        exit_code = 1
+    except CompatibilityError as e:
+        print(f"\nCompatibility Error: {e.message}")
+        logger.error(f"Compatibility error: {e.message}", exc_info=False)
+        exit_code = 1
+    except WorkbenchAgentError as e:
+        print(f"\nWorkbench Agent Error: {e.message}")
+        logger.error(f"Workbench agent error: {e.message}", exc_info=True)
+        exit_code = 1
+    except Exception as e:
+        print(f"\nUnexpected Error: {e}")
+        logger.critical(f"Unexpected error: {e}", exc_info=True)
+        exit_code = 1
     finally:
         # Calculate and print duration regardless of success/failure
         end_time = time.monotonic()

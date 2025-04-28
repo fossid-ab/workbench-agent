@@ -11,6 +11,22 @@ from workbench_agent import handlers
 from workbench_agent.api import Workbench
 # Mock utils functions used by handlers
 from workbench_agent import utils
+from workbench_agent.exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ConfigurationError,
+    AuthenticationError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError,
+    CompatibilityError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError
+)
 
 # Fixture for mock Workbench instance
 @pytest.fixture
@@ -18,6 +34,12 @@ def mock_workbench(mocker):
     # Mock methods used across handlers
     mock = mocker.MagicMock(spec=Workbench)
     mock._is_status_check_supported.return_value = True # Assume supported by default
+    mock.list_projects.return_value = [
+        {"name": "test_project", "code": "TEST_PROJECT"}
+    ]
+    mock.list_scans.return_value = [
+        {"name": "test_scan", "code": "TEST_SCAN", "id": "123"}
+    ]
     return mock
 
 # Fixture for mock params object
@@ -36,6 +58,10 @@ def mock_params(mocker):
     params.policy_check = False
     params.show_files = False
     # Set command-specific attributes in each test
+    params.command = "scan"
+    params.project_name = "test_project"
+    params.scan_name = "test_scan"
+    params.path = "/path/to/files"
     return params
 
 # --- Test handle_show_results ---
@@ -339,3 +365,80 @@ def test_handle_download_reports_multiple_one_fails(mock_save, mock_download, mo
     mock_download.assert_not_called() # Not called because wait failed
 
 # Add tests for handle_scan_git, handle_import_da following similar patterns
+
+def test_handle_scan_project_not_found(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project:
+        mock_resolve_project.side_effect = ProjectNotFoundError("Project not found")
+        
+        with pytest.raises(ProjectNotFoundError):
+            handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_scan_not_found(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project, \
+         patch("workbench_agent.handlers._resolve_scan") as mock_resolve_scan:
+        
+        mock_resolve_project.return_value = "TEST_PROJECT"
+        mock_resolve_scan.side_effect = ScanNotFoundError("Scan not found")
+        
+        with pytest.raises(ScanNotFoundError):
+            handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_api_error(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project, \
+         patch("workbench_agent.handlers._resolve_scan") as mock_resolve_scan, \
+         patch("workbench_agent.handlers._execute_standard_scan_flow") as mock_execute_flow:
+        
+        mock_resolve_project.return_value = "TEST_PROJECT"
+        mock_resolve_scan.return_value = ("TEST_SCAN", "123")
+        mock_execute_flow.side_effect = ApiError("API error")
+        
+        with pytest.raises(ApiError):
+            handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_network_error(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project, \
+         patch("workbench_agent.handlers._resolve_scan") as mock_resolve_scan, \
+         patch("workbench_agent.handlers._execute_standard_scan_flow") as mock_execute_flow:
+        
+        mock_resolve_project.return_value = "TEST_PROJECT"
+        mock_resolve_scan.return_value = ("TEST_SCAN", "123")
+        mock_execute_flow.side_effect = NetworkError("Network error")
+        
+        with pytest.raises(NetworkError):
+            handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_process_error(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project, \
+         patch("workbench_agent.handlers._resolve_scan") as mock_resolve_scan, \
+         patch("workbench_agent.handlers._execute_standard_scan_flow") as mock_execute_flow:
+        
+        mock_resolve_project.return_value = "TEST_PROJECT"
+        mock_resolve_scan.return_value = ("TEST_SCAN", "123")
+        mock_execute_flow.side_effect = ProcessError("Process error")
+        
+        with pytest.raises(ProcessError):
+            handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_process_timeout(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project, \
+         patch("workbench_agent.handlers._resolve_scan") as mock_resolve_scan, \
+         patch("workbench_agent.handlers._execute_standard_scan_flow") as mock_execute_flow:
+        
+        mock_resolve_project.return_value = "TEST_PROJECT"
+        mock_resolve_scan.return_value = ("TEST_SCAN", "123")
+        mock_execute_flow.side_effect = ProcessTimeoutError("Process timeout")
+        
+        with pytest.raises(ProcessTimeoutError):
+            handlers.handle_scan(mock_workbench, mock_params)
+
+def test_handle_scan_unexpected_error(mock_workbench, mock_params):
+    with patch("workbench_agent.handlers._resolve_project") as mock_resolve_project, \
+         patch("workbench_agent.handlers._resolve_scan") as mock_resolve_scan, \
+         patch("workbench_agent.handlers._execute_standard_scan_flow") as mock_execute_flow:
+        
+        mock_resolve_project.return_value = "TEST_PROJECT"
+        mock_resolve_scan.return_value = ("TEST_SCAN", "123")
+        mock_execute_flow.side_effect = Exception("Unexpected error")
+        
+        with pytest.raises(WorkbenchAgentError):
+            handlers.handle_scan(mock_workbench, mock_params)

@@ -6,7 +6,23 @@ import argparse
 import os
 
 # Import the function to test
-from workbench_agent.cli import parse_cmdline_args
+from workbench_agent.cli import parse_cmdline_args, main
+from workbench_agent.exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ConfigurationError,
+    AuthenticationError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError,
+    CompatibilityError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError
+)
 
 # --- Basic Command Parsing ---
 
@@ -135,3 +151,200 @@ def test_parse_validation_scan_non_existent_path(mock_exists):
 def test_parse_validation_missing_credentials():
     with pytest.raises(SystemExit):
          parse_cmdline_args()
+
+def test_parse_args_no_command():
+    with pytest.raises(ValidationError) as exc_info:
+        parse_cmdline_args()
+    assert "No command specified" in str(exc_info.value)
+
+def test_parse_args_scan_no_path():
+    with patch("sys.argv", ["workbench-agent", "scan", "--api-url", "http://example.com", "--api-key", "key"]):
+        with pytest.raises(ValidationError) as exc_info:
+            parse_cmdline_args()
+        assert "Path is required for scan command" in str(exc_info.value)
+
+def test_parse_args_scan_git_no_url():
+    with patch("sys.argv", ["workbench-agent", "scan-git", "--api-url", "http://example.com", "--api-key", "key"]):
+        with pytest.raises(ValidationError) as exc_info:
+            parse_cmdline_args()
+        assert "Git URL is required for scan-git command" in str(exc_info.value)
+
+def test_parse_args_scan_git_branch_and_tag():
+    with patch("sys.argv", ["workbench-agent", "scan-git", "--api-url", "http://example.com", "--api-key", "key", 
+                           "--git-url", "http://example.com/repo.git", "--git-branch", "main", "--git-tag", "v1.0"]):
+        with pytest.raises(ValidationError) as exc_info:
+            parse_cmdline_args()
+        assert "Cannot specify both git branch and tag" in str(exc_info.value)
+
+def test_parse_args_scan_git_no_ref():
+    with patch("sys.argv", ["workbench-agent", "scan-git", "--api-url", "http://example.com", "--api-key", "key", 
+                           "--git-url", "http://example.com/repo.git"]):
+        with pytest.raises(ValidationError) as exc_info:
+            parse_cmdline_args()
+        assert "Must specify either git branch or tag" in str(exc_info.value)
+
+def test_parse_args_import_da_no_path():
+    with patch("sys.argv", ["workbench-agent", "import-da", "--api-url", "http://example.com", "--api-key", "key"]):
+        with pytest.raises(ValidationError) as exc_info:
+            parse_cmdline_args()
+        assert "Path is required for import-da command" in str(exc_info.value)
+
+def test_parse_args_unknown_command():
+    with patch("sys.argv", ["workbench-agent", "unknown", "--api-url", "http://example.com", "--api-key", "key"]):
+        with pytest.raises(ValidationError) as exc_info:
+            parse_cmdline_args()
+        assert "Unknown command: unknown" in str(exc_info.value)
+
+def test_main_success():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_args = MagicMock()
+        mock_args.command = "scan"
+        mock_parse_args.return_value = mock_args
+        
+        result = main()
+        
+        assert result == 0
+        mock_parse_args.assert_called_once()
+        mock_workbench.assert_called_once()
+        mock_handle_scan.assert_called_once()
+
+def test_main_validation_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args:
+        mock_parse_args.side_effect = ValidationError("Invalid arguments")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_configuration_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_workbench.side_effect = ConfigurationError("Invalid configuration")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_authentication_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_workbench.side_effect = AuthenticationError("Invalid credentials")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_project_not_found():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = ProjectNotFoundError("Project not found")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_scan_not_found():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = ScanNotFoundError("Scan not found")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_api_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = ApiError("API error")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_network_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = NetworkError("Network error")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_process_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = ProcessError("Process error")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_process_timeout():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = ProcessTimeoutError("Process timeout")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_file_system_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = FileSystemError("File system error")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_compatibility_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = CompatibilityError("Compatibility error")
+        
+        result = main()
+        
+        assert result == 1
+
+def test_main_unexpected_error():
+    with patch("workbench_agent.cli.parse_args") as mock_parse_args, \
+         patch("workbench_agent.cli.Workbench") as mock_workbench, \
+         patch("workbench_agent.cli.handle_scan") as mock_handle_scan:
+        
+        mock_parse_args.return_value = MagicMock()
+        mock_handle_scan.side_effect = Exception("Unexpected error")
+        
+        result = main()
+        
+        assert result == 1

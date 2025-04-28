@@ -14,6 +14,22 @@ from typing import Generator, Optional, Dict, Any, List, Union, Tuple
 # Import Workbench class for type hinting and accessing constants/methods if needed
 # Use relative import within the package
 from .api import Workbench
+from .exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ConfigurationError,
+    AuthenticationError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError,
+    CompatibilityError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError
+)
 
 # Assume logger is configured in main.py and get it
 logger = logging.getLogger("log")
@@ -22,55 +38,50 @@ logger = logging.getLogger("log")
 
 def _resolve_project(workbench: Workbench, project_name: str, create_if_missing: bool = False) -> str:
     """
-    Finds a project by name, optionally creating it if it doesn't exist.
-
+    Resolve project name to project code.
+    
     Args:
-        workbench: The initialized Workbench object.
-        project_name: The name of the project to find or create.
-        create_if_missing: If True, create the project if it's not found.
-                           If False, raise an Exception if it's not found.
-
+        workbench: The Workbench API client instance
+        project_name: Name of the project
+        create_if_missing: Whether to create the project if it doesn't exist
+        
     Returns:
-        The project_code (str) of the found or created project.
-
+        str: Project code
+        
     Raises:
-        builtins.Exception: If listing fails, or if create_if_missing is False
-                            and the project is not found, or if creation fails.
+        ProjectNotFoundError: If the project doesn't exist and create_if_missing is False
+        ProjectExistsError: If the project exists and create_if_missing is True
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
     """
-    print(f"Resolving project '{project_name}' (Create if missing: {create_if_missing})...")
     try:
-        all_projects = workbench.list_projects()
+        # List all projects
+        projects = workbench.list_projects()
+        
+        # Find project by name
+        project = next((p for p in projects if p.get("name") == project_name), None)
+        
+        if project:
+            if create_if_missing:
+                raise ProjectExistsError(f"Project '{project_name}' already exists")
+            return project.get("code")
+        else:
+            if create_if_missing:
+                # Create project
+                response = workbench.create_project(project_name)
+                if response.get("status") != "1":
+                    raise ApiError(f"Failed to create project: {response.get('error', 'Unknown error')}", 
+                                 details=response)
+                return response.get("data", {}).get("code")
+            else:
+                raise ProjectNotFoundError(f"Project '{project_name}' not found")
+    except ApiError as e:
+        raise ApiError(f"Failed to resolve project '{project_name}': {e}", details=e.details)
+    except NetworkError as e:
+        raise NetworkError(f"Network error while resolving project '{project_name}': {e}", details=e.details)
     except Exception as e:
-        raise builtins.Exception(f"Failed to list projects while resolving '{project_name}': {e}") from e
-
-    found_project = next((p for p in all_projects if p.get('project_name') == project_name), None)
-
-    if found_project:
-        project_code = found_project.get('project_code')
-        if project_code:
-            print(f"Found existing project '{project_name}' with code '{project_code}'.")
-            return project_code
-        else:
-            # Should not happen if list_projects is correct, but good practice
-            raise builtins.Exception(f"Found project '{project_name}' but it is missing the 'project_code' field.")
-    else:
-        # Project not found
-        if create_if_missing:
-            print(f"Project '{project_name}' not found. Creating it...")
-            try:
-                # workbench.create_project already handles potential race conditions
-                # and returns the code whether it created it or found it during its own check.
-                project_code = workbench.create_project(project_name)
-                # create_project prints its own success message
-                return project_code
-            except Exception as e:
-                # Catch potential errors during creation
-                raise builtins.Exception(f"Failed to create project '{project_name}': {e}") from e
-        else:
-            # Creation not allowed, raise error
-            error_msg = f"Project '{project_name}' not found, and creation was not requested."
-            logger.error(error_msg)
-            raise builtins.Exception(error_msg)
+        raise WorkbenchAgentError(f"Unexpected error while resolving project '{project_name}': {e}", 
+                                details={"error": str(e)})
 
 def _ensure_scan_compatibility(params: argparse.Namespace, existing_scan_info: Dict[str, Any], scan_code: str):
     """Checks if the existing scan configuration is compatible with the current command."""

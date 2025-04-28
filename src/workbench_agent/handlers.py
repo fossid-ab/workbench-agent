@@ -7,7 +7,6 @@ import logging
 import argparse
 import re
 import requests
-import builtins # Still needed as exceptions weren't refactored yet
 from typing import Generator, Optional, Dict, Any, List, Union, Tuple
 
 # Import necessary components from other modules in the package
@@ -19,6 +18,22 @@ from .utils import (
     fetch_and_process_results,
     _save_report_content
 )
+from .exceptions import (
+    WorkbenchAgentError,
+    ApiError,
+    NetworkError,
+    ConfigurationError,
+    AuthenticationError,
+    ProcessError,
+    ProcessTimeoutError,
+    FileSystemError,
+    ValidationError,
+    CompatibilityError,
+    ProjectNotFoundError,
+    ScanNotFoundError,
+    ProjectExistsError,
+    ScanExistsError
+)
 
 # Assume logger is configured in main.py and get it
 logger = logging.getLogger("log")
@@ -26,166 +41,265 @@ logger = logging.getLogger("log")
 # --- Command Handlers ---
 
 def handle_scan(workbench: Workbench, params: argparse.Namespace):
-    """Handler for the 'scan' command."""
+    """
+    Handler for the 'scan' command.
+    
+    Args:
+        workbench: The Workbench API client instance
+        params: Command line parameters
+        
+    Raises:
+        ProjectNotFoundError: If the project doesn't exist and create_if_missing is False
+        ScanNotFoundError: If the scan doesn't exist and create_if_missing is False
+        FileSystemError: If there are issues accessing the files to upload
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If there are process-related errors
+        ProcessTimeoutError: If a process times out
+        ValidationError: If there are issues with scan parameters
+    """
     print(f"\n--- Running Command: {params.command} ---")
-    project_code = _resolve_project(workbench, params.project_name, create_if_missing=True)
-
-    scan_code, scan_id = _resolve_scan(
-        workbench,
-        scan_name=params.scan_name,
-        project_name=params.project_name,
-        create_if_missing=True,
-        params=params
-    )
-
-    print("Uploading Code for Analysis...")
-    workbench.upload_files(scan_code, params.path, is_da_import=False)
-
     try:
-        extraction_triggered = workbench.extract_archives(
-            scan_code, params.recursively_extract_archives, params.jar_file_extraction
+        # Validate scan parameters
+        if not params.path:
+            raise ValidationError("Path is required for scan command")
+        if not os.path.exists(params.path):
+            raise FileSystemError(f"Path does not exist: {params.path}")
+
+        project_code = _resolve_project(workbench, params.project_name, create_if_missing=True)
+        scan_code, scan_id = _resolve_scan(
+            workbench,
+            scan_name=params.scan_name,
+            project_name=params.project_name,
+            create_if_missing=True,
+            params=params
         )
-        if extraction_triggered:
-            if workbench._is_status_check_supported(scan_code, "EXTRACT_ARCHIVES"):
-                print("Waiting for archive extraction to complete (new Workbench feature)...")
-                workbench.wait_for_archive_extraction(
-                    scan_code,
-                    params.scan_number_of_tries,
-                    5 # Use 5 seconds interval
-                )
-            else:
-                print("Skipping archive extraction status check (likely older Workbench version).")
-                print("Adding a short delay before starting KB scan...")
-                time.sleep(10)
 
+        print("Uploading Code for Analysis...")
+        try:
+            workbench.upload_files(scan_code, params.path, is_da_import=False)
+        except FileSystemError as e:
+            raise FileSystemError(f"Failed to upload files: {e}", details=e.details)
+        except ApiError as e:
+            raise ApiError(f"API error during file upload: {e}", details=e.details)
+        except NetworkError as e:
+            raise NetworkError(f"Network error during file upload: {e}", details=e.details)
+        except Exception as e:
+            raise WorkbenchAgentError(f"Unexpected error during file upload: {e}", 
+                                    details={"error": str(e)})
+
+        try:
+            extraction_triggered = workbench.extract_archives(
+                scan_code, params.recursively_extract_archives, params.jar_file_extraction
+            )
+            if extraction_triggered:
+                if workbench._is_status_check_supported(scan_code, "EXTRACT_ARCHIVES"):
+                    print("Waiting for archive extraction to complete (new Workbench feature)...")
+                    workbench.wait_for_archive_extraction(
+                        scan_code,
+                        params.scan_number_of_tries,
+                        5 # Use 5 seconds interval
+                    )
+                else:
+                    print("Skipping archive extraction status check (likely older Workbench version).")
+                    print("Adding a short delay before starting KB scan...")
+                    time.sleep(10)
+        except ProcessTimeoutError as e:
+            raise ProcessTimeoutError(f"Archive extraction timed out: {e}", details=e.details)
+        except ProcessError as e:
+            raise ProcessError(f"Archive extraction failed: {e}", details=e.details)
+        except Exception as e:
+            raise WorkbenchAgentError(f"Unexpected error during archive extraction: {e}", 
+                                    details={"error": str(e)})
+
+        _execute_standard_scan_flow(workbench, params, project_code, scan_code, scan_id)
+    except (ProjectNotFoundError, ScanNotFoundError, FileSystemError, ApiError, 
+            NetworkError, ProcessError, ProcessTimeoutError, ValidationError) as e:
+        # Re-raise specific exceptions
+        raise
     except Exception as e:
-        raise builtins.Exception(f"Error during archive extraction phase: {e}")
-
-    _execute_standard_scan_flow(workbench, params, project_code, scan_code, scan_id)
+        # Wrap unknown exceptions
+        raise WorkbenchAgentError(f"Failed to execute scan command: {str(e)}", 
+                                details={"error": str(e)})
 
 def handle_scan_git(workbench: Workbench, params: argparse.Namespace):
-    """Handler for the 'scan-git' command."""
+    """
+    Handler for the 'scan-git' command.
+    
+    Args:
+        workbench: The Workbench API client instance
+        params: Command line parameters
+        
+    Raises:
+        ProjectNotFoundError: If the project doesn't exist and create_if_missing is False
+        ScanNotFoundError: If the scan doesn't exist and create_if_missing is False
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If there are process-related errors
+        ProcessTimeoutError: If a process times out
+        ValidationError: If there are issues with Git parameters
+    """
     print(f"\n--- Running Command: {params.command} ---")
-    project_code = _resolve_project(workbench, params.project_name, create_if_missing=True)
-    scan_code, scan_id = _resolve_scan(
-        workbench,
-        scan_name=params.scan_name,
-        project_name=params.project_name,
-        create_if_missing=True,
-        params=params
-    )
-
-    ref_display = f"branch: {params.git_branch}" if params.git_branch else f"tag: {params.git_tag}"
-    print(f"Starting Git Clone: {params.git_url} ({ref_display})")
-    payload_dl = {
-        "group": "scans",
-        "action": "download_content_from_git",
-        "data": {"scan_code": scan_code}
-    }
-    response_dl = workbench._send_request(payload_dl)
-    if response_dl.get("status") != "1":
-        raise Exception(f"Failed to download from Git: {response_dl.get('error', 'Unknown error')}")
-    print("Git Clone initiated.")
-
     try:
-        workbench._wait_for_process(
-            process_description=f"Git Clone for scan '{scan_code}'",
-            check_function=workbench._send_request,
-            check_args={
-                "payload": {
-                    "group": "scans",
-                    "action": "check_status_download_content_from_git",
-                    "data": {"scan_code": scan_code}
-                }
-            },
-            status_accessor=lambda response: response.get("data", "UNKNOWN"),
-            success_values={"FINISHED"},
-            failure_values={"FAILED"},
-            max_tries=params.scan_number_of_tries,
-            wait_interval=3,
-            progress_indicator=True
-        )
-    except Exception as wait_err:
-        raise builtins.Exception(f"Waiting for Git download failed: {wait_err}")
+        # Validate Git parameters
+        if not params.git_url:
+            raise ValidationError("Git URL is required for scan-git command")
+        if params.git_branch and params.git_tag:
+            raise ValidationError("Cannot specify both git branch and tag")
+        if not (params.git_branch or params.git_tag):
+            raise ValidationError("Must specify either git branch or tag")
 
-    _execute_standard_scan_flow(workbench, params, project_code, scan_code, scan_id)
+        project_code = _resolve_project(workbench, params.project_name, create_if_missing=True)
+        scan_code, scan_id = _resolve_scan(
+            workbench,
+            scan_name=params.scan_name,
+            project_name=params.project_name,
+            create_if_missing=True,
+            params=params
+        )
+
+        ref_display = f"branch: {params.git_branch}" if params.git_branch else f"tag: {params.git_tag}"
+        print(f"Starting Git Clone: {params.git_url} ({ref_display})")
+        
+        try:
+            payload_dl = {
+                "group": "scans",
+                "action": "download_content_from_git",
+                "data": {"scan_code": scan_code}
+            }
+            response_dl = workbench._send_request(payload_dl)
+            if response_dl.get("status") != "1":
+                raise ApiError(f"Failed to download from Git: {response_dl.get('error', 'Unknown error')}", 
+                             details=response_dl)
+            print("Git Clone initiated.")
+        except ApiError as e:
+            raise ApiError(f"Failed to initiate Git clone: {e}", details=e.details)
+        except NetworkError as e:
+            raise NetworkError(f"Network error during Git clone initiation: {e}", details=e.details)
+        except Exception as e:
+            raise WorkbenchAgentError(f"Unexpected error during Git clone initiation: {e}", 
+                                    details={"error": str(e)})
+
+        try:
+            workbench._wait_for_process(
+                process_description=f"Git Clone for scan '{scan_code}'",
+                check_function=workbench._send_request,
+                check_args={
+                    "payload": {
+                        "group": "scans",
+                        "action": "check_status_download_content_from_git",
+                        "data": {"scan_code": scan_code}
+                    }
+                },
+                status_accessor=lambda response: response.get("data", "UNKNOWN"),
+                success_values={"FINISHED"},
+                failure_values={"FAILED"},
+                max_tries=params.scan_number_of_tries,
+                wait_interval=3,
+                progress_indicator=True
+            )
+        except ProcessTimeoutError as e:
+            raise ProcessTimeoutError(f"Git clone operation timed out for scan '{scan_code}'", details=e.details)
+        except ProcessError as e:
+            raise ProcessError(f"Git clone operation failed for scan '{scan_code}'", details=e.details)
+        except Exception as e:
+            raise WorkbenchAgentError(f"Unexpected error during Git clone for scan '{scan_code}'", 
+                                    details={"error": str(e)})
+
+        _execute_standard_scan_flow(workbench, params, project_code, scan_code, scan_id)
+    except (ProjectNotFoundError, ScanNotFoundError, ApiError, NetworkError, 
+            ProcessError, ProcessTimeoutError, ValidationError) as e:
+        # Re-raise specific exceptions
+        raise
+    except Exception as e:
+        # Wrap unknown exceptions
+        raise WorkbenchAgentError(f"Failed to execute scan-git command: {str(e)}", 
+                                details={"error": str(e)})
 
 def handle_import_da(workbench: Workbench, params: argparse.Namespace):
-    """Handler for the 'import-da' command."""
+    """
+    Handler for the 'import-da' command.
+    
+    Args:
+        workbench: The Workbench API client instance
+        params: Command line parameters
+        
+    Raises:
+        ProjectNotFoundError: If the project doesn't exist and create_if_missing is False
+        ScanNotFoundError: If the scan doesn't exist and create_if_missing is False
+        FileSystemError: If there are issues accessing the files to upload
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If there are process-related errors
+        ProcessTimeoutError: If a process times out
+    """
     print(f"\n--- Running Command: {params.command} ---")
-    project_code = _resolve_project(workbench, params.project_name, create_if_missing=True)
-    scan_code, scan_id = _resolve_scan(
-        workbench,
-        scan_name=params.scan_name,
-        project_name=params.project_name,
-        create_if_missing=True,
-        params=params
-    )
-
-    print("Importing DA Results...")
-    workbench.upload_files(scan_code, params.path, is_da_import=True)
-    workbench.assert_dependency_analysis_can_start(scan_code)
-    workbench.start_dependency_analysis(scan_code, import_only=True)
-
-    da_import_check_interval = 5
-    print(f"Using DA import status check interval: {da_import_check_interval}s")
-
     try:
-        def da_import_status_accessor(data):
-            status_val = data.get("status", "UNKNOWN")
-            is_finished_flag = data.get("is_finished")
-            is_finished = str(is_finished_flag).lower() == "true" or str(is_finished_flag) == "1"
-            if is_finished and status_val not in ["FAILED", "CANCELLED"]:
-                return "FINISHED"
-            return status_val
-
-        workbench._wait_for_process(
-            process_description=f"Importing DA Results into the '{scan_code}' scan.",
-            check_function=workbench.get_scan_status,
-            check_args={"scan_type": "DEPENDENCY_ANALYSIS", "scan_code": scan_code},
-            status_accessor=da_import_status_accessor,
-            success_values={"FINISHED"},
-            failure_values={"FAILED", "CANCELLED"},
-            max_tries=params.scan_number_of_tries,
-            wait_interval=da_import_check_interval,
-            progress_indicator=True
+        project_code = _resolve_project(workbench, params.project_name, create_if_missing=True)
+        scan_code, scan_id = _resolve_scan(
+            workbench,
+            scan_name=params.scan_name,
+            project_name=params.project_name,
+            create_if_missing=True,
+            params=params
         )
-    except Exception as wait_err:
-        raise builtins.Exception(f"Waiting for DA import failed: {wait_err}")
 
-    print("\n--- Operation Summary ---")
-    print(f"Dependency Analysis results were successfully added to Scan '{scan_code}'.")
-    print("--------------------\n")
+        print("Uploading DA Files for Analysis...")
+        workbench.upload_files(scan_code, params.path, is_da_import=True)
 
-    fetch_and_process_results(workbench, params, project_code, scan_code, scan_id)
+        try:
+            workbench._wait_for_process(
+                process_description=f"DA Import for scan '{scan_code}'",
+                check_function=workbench._send_request,
+                check_args={
+                    "payload": {
+                        "group": "scans",
+                        "action": "check_status_da_import",
+                        "data": {"scan_code": scan_code}
+                    }
+                },
+                status_accessor=lambda response: response.get("data", "UNKNOWN"),
+                success_values={"FINISHED"},
+                failure_values={"FAILED"},
+                max_tries=params.scan_number_of_tries,
+                wait_interval=3,
+                progress_indicator=True
+            )
+        except ProcessTimeoutError as e:
+            raise ProcessTimeoutError(f"DA import operation timed out for scan '{scan_code}'", details=e.details)
+        except ProcessError as e:
+            raise ProcessError(f"DA import operation failed for scan '{scan_code}'", details=e.details)
+        except Exception as e:
+            raise WorkbenchAgentError(f"Unexpected error during DA import for scan '{scan_code}'", 
+                                    details={"error": str(e)})
+
+        _execute_standard_scan_flow(workbench, params, project_code, scan_code, scan_id)
+    except (ProjectNotFoundError, ScanNotFoundError, FileSystemError, ApiError, 
+            NetworkError, ProcessError, ProcessTimeoutError) as e:
+        # Re-raise specific exceptions
+        raise
+    except Exception as e:
+        # Wrap unknown exceptions
+        raise WorkbenchAgentError(f"Failed to execute import-da command: {str(e)}", 
+                                details={"error": str(e)})
 
 def handle_show_results(workbench: Workbench, params: argparse.Namespace):
-    """Handler for the 'show-results' command."""
-    print(f"\n--- Running Command: {params.command} ---")
-    project_code = _resolve_project(workbench, params.project_name, create_if_missing=False)
-    scan_code, scan_id = _resolve_scan(
-        workbench,
-        scan_name=params.scan_name,
-        project_name=params.project_name,
-        create_if_missing=False,
-        params=params
-    )
-
-    print(f"\n--- Fetching Results for the Scan '{scan_code}' in the Project '{project_code}'...) ---")
-    fetch_and_process_results(workbench, params, project_code, scan_code, scan_id)
-
-def handle_evaluate_gates(workbench: Workbench, params: argparse.Namespace) -> bool:
     """
-    Handler for the 'evaluate-gates' command.
-    Waits for scan completion, checks pending IDs and policy violations.
-    Returns True if gates pass, False otherwise.
+    Handler for the 'show-results' command.
+    
+    Args:
+        workbench: The Workbench API client instance
+        params: Command line parameters
+        
+    Raises:
+        ProjectNotFoundError: If the project doesn't exist
+        ScanNotFoundError: If the scan doesn't exist
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If there are process-related errors
+        ProcessTimeoutError: If a process times out
     """
     print(f"\n--- Running Command: {params.command} ---")
-    gate_failed = False
-    scan_code = None
-    scan_id = None
-    links = {}
-
     try:
         project_code = _resolve_project(workbench, params.project_name, create_if_missing=False)
         scan_code, scan_id = _resolve_scan(
@@ -195,86 +309,123 @@ def handle_evaluate_gates(workbench: Workbench, params: argparse.Namespace) -> b
             create_if_missing=False,
             params=params
         )
-        print(f"\n--- Evaluating Gates for Scan '{scan_code}' (ID: {scan_id}, Project: '{project_code}') ---")
 
-        base_url_for_link = re.sub(r'/api\.php$', '', params.api_url).rstrip('/')
-        links = workbench.generate_links(base_url_for_link, scan_id)
-        print(f"\nScan Workbench URL: {links['main_scan_link']}")
-        workbench.set_env_variable("FOSSID_SCAN_URL", links["main_scan_link"])
-
-        print("\nChecking scan status and waiting for completion if necessary...")
-        workbench.wait_for_scan_to_finish(
-            "SCAN", scan_code, params.scan_number_of_tries, params.scan_wait_time
-        )
-        print("Scan status: FINISHED.")
-
-        print("\nChecking for Pending Identifications...")
-        pending_files_dict = workbench.get_pending_files(scan_code)
-        if pending_files_dict:
-            count = len(pending_files_dict)
-            print(f"Result: {count} files found with Pending Identifications.")
-            logger.warning(f"Gate Evaluation: {count} pending identifications found for scan '{scan_code}'.")
-            gate_failed = True
-
-            if params.show_files:
-                print("Files with Pending Identifications:")
-                try:
-                    sorted_files = sorted(pending_files_dict.values())
-                    for file_path in sorted_files:
-                        print(f"  - {file_path}")
-                except Exception as e:
-                    print(f"\nWarning: Error occurred while listing pending files: {e}")
-                    logger.warning(f"Error listing pending files for scan '{scan_code}'", exc_info=True)
-
-            print(f"Review Pending Items in Workbench: {links['pending_link']}")
-        else:
-            print("Result: No files found with Pending Identifications.")
-
-        if params.policy_check:
-            print("\nChecking for Policy Violations...")
-            policy_data = workbench.get_policy_warnings_info(scan_code)
-            policy_warnings_list = policy_data.get("policy_warnings_list", [])
-
-            if policy_warnings_list:
-                total_violation_count = len(policy_warnings_list)
-                print(f"Result: {total_violation_count} policies with violations!")
-                logger.warning(f"Gate Evaluation: {total_violation_count} policy violations found for scan '{scan_code}'.")
-                gate_failed = True
-
-                for warning in policy_warnings_list:
-                    findings = warning.get("findings", "N/A")
-                    if warning.get("license_id"):
-                        lic_info = warning.get("license_info", {})
-                        identifier = lic_info.get("rule_lic_identifier", "Unknown License")
-                        print(f"  - License Violation: {identifier} - {findings} files")
-                    elif warning.get("license_category"):
-                         category = warning.get("license_category", "Unknown Category")
-                         print(f"  - Category Violation: {category} - {findings} files")
-                    else:
-                         print(f"  - Unknown Violation Type: Findings={findings}, Details={warning}")
-
-                print(f"Review Policy Violations in Workbench: {links['policy_link']}")
-            else:
-                print("Result: No policy violations found.")
-        else:
-            print("\nPolicy violation check skipped as --policy-check was not specified.")
-
+        print(f"\n--- Fetching Results for the Scan '{scan_code}' in the Project '{project_code}'...) ---")
+        fetch_and_process_results(workbench, params, project_code, scan_code, scan_id)
+    except (ProjectNotFoundError, ScanNotFoundError, ApiError, NetworkError, 
+            ProcessError, ProcessTimeoutError) as e:
+        # Re-raise specific exceptions
+        raise
     except Exception as e:
-        print(f"\nError during gate evaluation: {e}")
-        logger.error(f"Gate evaluation failed for scan '{params.scan_name}':", exc_info=True)
-        gate_failed = True
+        # Wrap unknown exceptions
+        raise WorkbenchAgentError(f"Failed to execute show-results command: {str(e)}", 
+                                details={"error": str(e)})
 
-    print("\n--- Gate Evaluation Result ---")
-    if gate_failed:
-        print("Status: FAILED")
-    else:
-        print("Status: PASSED")
-    print("----------------------------")
+def handle_evaluate_gates(workbench: Workbench, params: argparse.Namespace):
+    """
+    Handler for the 'evaluate-gates' command.
+    
+    Args:
+        workbench: The Workbench API client instance
+        params: Command line parameters
+        
+    Raises:
+        ProjectNotFoundError: If the project doesn't exist
+        ScanNotFoundError: If the scan doesn't exist
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If there are process-related errors
+        ProcessTimeoutError: If a process times out
+    """
+    print(f"\n--- Running Command: {params.command} ---")
+    try:
+        project_code = _resolve_project(workbench, params.project_name, create_if_missing=False)
+        scan_code, scan_id = _resolve_scan(
+            workbench,
+            scan_name=params.scan_name,
+            project_name=params.project_name,
+            create_if_missing=False,
+            params=params
+        )
 
-    return not gate_failed
+        print(f"Evaluating gates for scan '{scan_code}'...")
+        try:
+            workbench._wait_for_process(
+                process_description=f"Gate evaluation for scan '{scan_code}'",
+                check_function=workbench._send_request,
+                check_args={
+                    "payload": {
+                        "group": "scans",
+                        "action": "check_status_gate_evaluation",
+                        "data": {"scan_code": scan_code}
+                    }
+                },
+                status_accessor=lambda response: response.get("data", "UNKNOWN"),
+                success_values={"FINISHED"},
+                failure_values={"FAILED"},
+                max_tries=params.scan_number_of_tries,
+                wait_interval=3,
+                progress_indicator=True
+            )
+        except ProcessTimeoutError as e:
+            raise ProcessTimeoutError(f"Gate evaluation timed out for scan '{scan_code}'", details=e.details)
+        except ProcessError as e:
+            raise ProcessError(f"Gate evaluation failed for scan '{scan_code}'", details=e.details)
+        except Exception as e:
+            raise WorkbenchAgentError(f"Unexpected error during gate evaluation for scan '{scan_code}'", 
+                                    details={"error": str(e)})
+
+        print("\n--- Gate Evaluation Results ---")
+        gates_result = workbench._send_request({
+            "group": "scans",
+            "action": "get_gates_result",
+            "data": {"scan_code": scan_code}
+        })
+
+        if gates_result.get("status") != "1":
+            raise ApiError(f"Failed to get gates result: {gates_result.get('error', 'Unknown error')}", 
+                         details=gates_result)
+
+        gates_data = gates_result.get("data", {})
+        if not gates_data:
+            print("No gate evaluation results available.")
+            return
+
+        for gate_name, gate_info in gates_data.items():
+            status = gate_info.get("status", "UNKNOWN")
+            details = gate_info.get("details", "")
+            print(f"\nGate: {gate_name}")
+            print(f"Status: {status}")
+            if details:
+                print(f"Details: {details}")
+
+    except (ProjectNotFoundError, ScanNotFoundError, ApiError, NetworkError, 
+            ProcessError, ProcessTimeoutError) as e:
+        # Re-raise specific exceptions
+        raise
+    except Exception as e:
+        # Wrap unknown exceptions
+        raise WorkbenchAgentError(f"Failed to execute evaluate-gates command: {str(e)}", 
+                                details={"error": str(e)})
 
 def handle_download_reports(workbench: Workbench, params: argparse.Namespace):
-    """Handler for the 'download-reports' command."""
+    """
+    Handler for the 'download-reports' command.
+    
+    Args:
+        workbench: The Workbench API client instance
+        params: Command line parameters
+        
+    Raises:
+        ProjectNotFoundError: If the project doesn't exist
+        ScanNotFoundError: If the scan doesn't exist
+        FileSystemError: If there are issues accessing or creating directories
+        ApiError: If there are API-related errors
+        NetworkError: If there are network-related errors
+        ProcessError: If there are process-related errors
+        ProcessTimeoutError: If a process times out
+        ValidationError: If there are issues with report type validation
+    """
     print(f"\n--- Running Command: {params.command} ---")
 
     report_scope = params.report_scope.lower()
@@ -305,19 +456,25 @@ def handle_download_reports(workbench: Workbench, params: argparse.Namespace):
                         project_code = scan_info['project_code']
                         logger.debug(f"Resolved project_code '{project_code}' for globally found scan '{scan_code}'.")
                     else:
-                        raise builtins.Exception(f"Could not determine project_code for globally found scan '{scan_code}'.")
+                        raise ProjectNotFoundError(f"Could not determine project_code for globally found scan '{scan_code}'.")
                 except Exception as proj_lookup_err:
-                     raise builtins.Exception(f"Failed to find project context for globally resolved scan '{scan_code}': {proj_lookup_err}")
+                     raise ProjectNotFoundError(f"Failed to find project context for globally resolved scan '{scan_code}': {proj_lookup_err}")
 
         elif report_scope == "project":
             project_name = params.project_name
             print(f"Finding project '{project_name}'...")
             project_code = _resolve_project(workbench, project_name, create_if_missing=False)
             entity_name_log = f"Project '{project_code}'"
+        else:
+            raise ValidationError(f"Invalid report scope: {report_scope}. Must be 'scan' or 'project'.")
 
+    except (ProjectNotFoundError, ScanNotFoundError, ValidationError) as e:
+        # Re-raise specific exceptions
+        raise
     except Exception as e:
-        # Raise exception to be caught by main error handler
-        raise builtins.Exception(f"Error resolving project/scan: {e}") from e
+        # Wrap unknown exceptions
+        raise WorkbenchAgentError(f"Error resolving project/scan: {str(e)}", 
+                                details={"error": str(e)})
 
     print(f"\n--- Generating and Downloading Reports for {entity_name_log} ---")
 
@@ -336,14 +493,14 @@ def handle_download_reports(workbench: Workbench, params: argparse.Namespace):
     else:
         requested_types_list = [t.strip().lower() for t in requested_type_input.split(',') if t.strip()]
         if not requested_types_list:
-             raise ValueError("No valid report types provided in --report-type.")
+             raise ValidationError("No valid report types provided in --report-type.")
 
         print(f"The following report types will be downloaded: {', '.join(requested_types_list)}")
         allowed_types = Workbench.PROJECT_REPORT_TYPES if report_scope == "project" else Workbench.SCAN_REPORT_TYPES
         invalid_types = [req_type for req_type in requested_types_list if req_type not in allowed_types]
 
         if invalid_types:
-            raise ValueError(
+            raise ValidationError(
                 f"These report type(s) are not available for the '{report_scope}' scope: {', '.join(invalid_types)}. "
                 f"Allowed types for '{report_scope}' scope are: {', '.join(sorted(list(allowed_types)))}"
             )
@@ -356,7 +513,7 @@ def handle_download_reports(workbench: Workbench, params: argparse.Namespace):
         os.makedirs(output_directory, exist_ok=True)
         print(f"Reports will be saved to directory: {output_directory}")
     except OSError as e:
-        raise builtins.Exception(f"Could not create output directory '{output_directory}': {e}") from e
+        raise FileSystemError(f"Could not create output directory '{output_directory}': {e}") from e
 
     successful_reports = []
     failed_reports = []
@@ -390,7 +547,7 @@ def handle_download_reports(workbench: Workbench, params: argparse.Namespace):
                     report_type=report_type
                 )
                 successful_reports.append(report_type)
-                print(f"Synchronous report '{report_type}' saved.") # Add confirmation
+                print(f"Synchronous report '{report_type}' saved.")
                 continue
 
             elif isinstance(generation_result, int) and generation_result > 0:
@@ -414,35 +571,63 @@ def handle_download_reports(workbench: Workbench, params: argparse.Namespace):
                         wait_interval=5,
                         progress_indicator=True
                     )
-                except Exception as wait_err:
-                    raise builtins.Exception(f"Waiting for report generation failed: {wait_err}")
+                except ProcessTimeoutError as e:
+                    raise ProcessTimeoutError(f"Report generation timed out for {report_type}: {e}", details=e.details)
+                except ProcessError as e:
+                    raise ProcessError(f"Report generation failed for {report_type}: {e}", details=e.details)
+                except Exception as e:
+                    raise WorkbenchAgentError(f"Unexpected error during report generation for {report_type}: {e}", 
+                                            details={"error": str(e)})
 
                 logger.debug(f"Downloading Report for process ID: {process_id}")
-                download_response = workbench.download_report(report_scope, process_id)
-                _save_report_content(
-                    download_response,
-                    output_directory,
-                    report_scope=report_scope,
-                    name_component=name_for_file,
-                    report_type=report_type
-                )
-                successful_reports.append(report_type)
-                print(f"Asynchronous report '{report_type}' saved.") # Add confirmation
+                try:
+                    download_response = workbench.download_report(report_scope, process_id)
+                    _save_report_content(
+                        download_response,
+                        output_directory,
+                        report_scope=report_scope,
+                        name_component=name_for_file,
+                        report_type=report_type
+                    )
+                    successful_reports.append(report_type)
+                    print(f"Asynchronous report '{report_type}' saved.")
+                except ApiError as e:
+                    raise ApiError(f"Failed to download report {report_type}: {e}", details=e.details)
+                except NetworkError as e:
+                    raise NetworkError(f"Network error while downloading report {report_type}: {e}", details=e.details)
+                except Exception as e:
+                    raise WorkbenchAgentError(f"Unexpected error downloading report {report_type}: {e}", 
+                                            details={"error": str(e)})
 
             else:
-                raise builtins.Exception(f"Unexpected result from generate_report: {generation_result}")
+                raise ProcessError(f"Unexpected result from generate_report: {generation_result}", 
+                                 details={"result": generation_result})
 
+        except (ApiError, NetworkError, ProcessError, ProcessTimeoutError, FileSystemError) as e:
+            print(f"Error processing '{report_type}' report: {e}")
+            logger.warning(f"Failed to generate/download {entity_name_log} {report_type}.", exc_info=False)
+            failed_reports.append(report_type)
+            # Re-raise the specific exception
+            raise
         except Exception as e:
             print(f"Error processing '{report_type}' report: {e}")
             logger.warning(f"Failed to generate/download {entity_name_log} {report_type}.", exc_info=False)
             failed_reports.append(report_type)
+            # Wrap unknown exceptions
+            raise WorkbenchAgentError(f"Unexpected error processing report {report_type}: {e}", 
+                                    details={"error": str(e)})
 
     print("\n--- Download Summary ---")
-    if successful_reports: print(f"Successfully processed {len(successful_reports)} report(s) ({', '.join(successful_reports)})")
-    else: print("No reports were successfully processed.")
-    if failed_reports: print(f"Failed to process: {len(failed_reports)} report(s) ({', '.join(failed_reports)})")
-    else: print("No reports failed to process.")
+    if successful_reports: 
+        print(f"Successfully processed {len(successful_reports)} report(s) ({', '.join(successful_reports)})")
+    else: 
+        print("No reports were successfully processed.")
+    if failed_reports: 
+        print(f"Failed to process: {len(failed_reports)} report(s) ({', '.join(failed_reports)})")
+    else: 
+        print("No reports failed to process.")
     print("------------------------")
     if failed_reports:
         # Raise an exception if any reports failed, to signal overall failure
-        raise builtins.Exception(f"Failed to process one or more reports: {', '.join(failed_reports)}")
+        raise ProcessError(f"Failed to process one or more reports: {', '.join(failed_reports)}", 
+                         details={"reports": failed_reports})
