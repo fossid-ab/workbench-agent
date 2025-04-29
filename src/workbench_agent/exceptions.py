@@ -215,28 +215,3 @@ class AuthenticationError(ApiError):
             logger.error(f"Authentication failed: {e.message}")
     """
     pass
-
-class RateLimitError(ApiError):
-    """Raised when the API rate limit is exceeded.
-    
-    Example:
-        try:
-            api.make_request()
-        except RateLimitError as e:
-            logger.error(f"Rate limit exceeded: {e.message}")
-    """
-    pass
-
-class DependencyError(WorkbenchAgentError):
-    """Raised when there's an error with external dependencies.
-    
-    This includes missing system dependencies, incompatible versions,
-    and other dependency-related issues.
-    
-    Example:
-        try:
-            check_dependencies()
-        except DependencyError as e:
-            logger.error(f"Dependency error: {e.message}")
-    """
-    pass

@@ -98,3 +98,5 @@ da-analyzer-results
 
 # Optional: User-specific test scripts if not shared
 test-commands.txt
+
+monolith/

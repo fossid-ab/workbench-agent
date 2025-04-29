@@ -2,7 +2,6 @@
 
 import argparse
 import os
-import sys
 import re
 import logging
 from argparse import RawTextHelpFormatter
@@ -29,24 +28,24 @@ from .exceptions import (
 
 logger = logging.getLogger(__name__)
 
-# --- Helper functions for adding common arguments (moved outside parse_cmdline_args) ---
+# --- Helper functions for common arguments ---
 def add_common_scan_options(subparser):
     scan_options_args = subparser.add_argument_group("KB Scan Options")
     scan_options_args.add_argument("--limit", help="Limits KB scan results (Default: 10)", type=int, default=10)
     scan_options_args.add_argument("--sensitivity", help="Sets KB snippet sensitivity (Default: 10)", type=int, default=10)
-    scan_options_args.add_argument("--autoid-file-licenses", help="Auto-detect license declarations.", action="store_true", default=False)
-    scan_options_args.add_argument("--autoid-file-copyrights", help="Auto-detect copyright statements.", action="store_true", default=False)
-    scan_options_args.add_argument("--autoid-pending-ids", help="Auto-resolve pending identifications.", action="store_true", default=False)
-    scan_options_args.add_argument("--delta-scan", help="Scan only delta (new/modified files).", action="store_true", default=False)
-    scan_options_args.add_argument("--id-reuse", help="Reuse existing identifications.", action="store_true", default=False)
+    scan_options_args.add_argument("--autoid-file-licenses", help="Auto-Identify license declarations in files.", action="store_true", default=False)
+    scan_options_args.add_argument("--autoid-file-copyrights", help="Auto-Identify copyright statements in files.", action="store_true", default=False)
+    scan_options_args.add_argument("--autoid-pending-ids", help="Auto-Identify pending files using the Top Match.", action="store_true", default=False)
+    scan_options_args.add_argument("--delta-scan", help="For KB scans, only scan new/modified files with Delta Scan.", action="store_true", default=False)
+    scan_options_args.add_argument("--id-reuse", help="Auto-Identify files using existing identifications.", action="store_true", default=False)
     scan_options_args.add_argument(
         "--id-reuse-type",
-        help="Type of identification reuse: 'any' (default), 'only_me', 'project' (reuse from specific project), 'scan' (reuse from specific scan).",
+        help="Control how ID Reuse operates. Supports: 'any' (any existing ID), 'only_me' (IDs by this user token), 'project' (IDs from another project), 'scan' (IDs from another scan).",
         choices=["any", "only_me", "project", "scan"],
         default="any"
     )
     scan_options_args.add_argument("--id-reuse-source", help="Project/Scan NAME for 'project' or 'scan' reuse type (required if id-reuse-type is 'project' or 'scan').", metavar="NAME")
-    scan_options_args.add_argument("--run-dependency-analysis", help="Run dependency analysis *after* KB scan.", action="store_true", default=False)
+    scan_options_args.add_argument("--run-dependency-analysis", help="Run dependency analysis after KB scan.", action="store_true", default=False)
 
 def add_common_monitoring_options(subparser):
     monitor_args = subparser.add_argument_group("Scan Monitoring Options")
@@ -55,10 +54,12 @@ def add_common_monitoring_options(subparser):
 
 def add_common_result_options(subparser):
     results_display_args = subparser.add_argument_group("Result Display & Save Options")
-    results_display_args.add_argument("--show-licenses", help="Display/Save identified licenses.", action="store_true", default=False)
-    results_display_args.add_argument("--show-components", help="Display/Save identified components.", action="store_true", default=False)
-    results_display_args.add_argument("--show-policy-warnings", help="Display/Save scan policy warnings count.", action="store_true", default=False)
-    results_display_args.add_argument("--path-result", help="Save requested results to this file/directory (JSON format).", metavar="PATH")
+    results_display_args.add_argument("--show-licenses", help="Shows all licenses found by the identification process.", action="store_true", default=False)
+    results_display_args.add_argument("--show-components", help="Shows all components found by the identification process.", action="store_true", default=False)
+    results_display_args.add_argument("--show-dependencies", help="Shows all components found by Dependency Analysis.", action="store_true", default=False)
+    results_display_args.add_argument("--show-scan-metrics", help="Show metrics on file identifications (total files, pending id, identified, no matches).", action="store_true", default=False)
+    results_display_args.add_argument("--show-policy-warnings", help="Shows Policy Warnings in identified components or dependencies.", action="store_true", default=False)
+    results_display_args.add_argument("--path-result", help="Saves the requested results to this file/directory (JSON format).", metavar="PATH")
 
 # --- Main Parsing Function ---
 def parse_cmdline_args():
@@ -171,9 +172,9 @@ Example Usage:
         description='Import Dependency Analysis results from an analyzer-result.json file.',
         formatter_class=RawTextHelpFormatter
     )
-    import_da_parser.add_argument("--project-name", help="Project name for the scan.", type=str, required=True, metavar="NAME")
-    import_da_parser.add_argument("--scan-name", help="Scan name for the scan.", type=str, required=True, metavar="NAME")
-    import_da_parser.add_argument("--path", help="Path to the 'analyzer-result.json' file.", type=str, required=True)
+    import_da_parser.add_argument("--project-name", help="Project name to associate the scan with.", type=str, required=True, metavar="NAME")
+    import_da_parser.add_argument("--scan-name", help="Scan name to import DA results into.", type=str, required=True, metavar="NAME")
+    import_da_parser.add_argument("--path", help="Path to the 'analyzer-result.json' file to be imported.", type=str, required=True)
     add_common_monitoring_options(import_da_parser)
     add_common_result_options(import_da_parser)
 
@@ -192,13 +193,19 @@ Example Usage:
     evaluate_gates_parser = subparsers.add_parser(
         'evaluate-gates',
         help='Check scan status and policy violations.',
-        description='Check if a scan has completed, has pending identifications, or policy violations.',
+        description='Checks scan completion, pending IDs, and policy violations. Sets exit code based on --fail-on.',
         formatter_class=RawTextHelpFormatter
     )
     evaluate_gates_parser.add_argument("--project-name", help="Project name containing the scan.", type=str, required=True, metavar="NAME")
     evaluate_gates_parser.add_argument("--scan-name", help="Scan name to evaluate gates for.", type=str, required=True, metavar="NAME")
-    evaluate_gates_parser.add_argument("--policy-check", help="Check for policy violations after checking for pending identifications.", action="store_true", default=False)
     evaluate_gates_parser.add_argument("--show-files", help="Display the File Names with Pending IDs.", action="store_true", default=False)
+    evaluate_gates_parser.add_argument(
+        "--fail-on",
+        help="Sets whether to cause the command to fail (exit code 1). Default: none.",
+        choices=['none', 'pending', 'policy', 'both'],
+        default='none',
+        metavar='MODE'
+    )
     add_common_monitoring_options(evaluate_gates_parser)
 
     # --- 'download-reports' Subcommand ---
@@ -264,4 +271,15 @@ Example Usage:
     add_common_monitoring_options(scan_git_parser)
     add_common_result_options(scan_git_parser)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.command in ['scan', 'scan-git'] and args.id_reuse:
+        if args.id_reuse_type in ['project', 'scan'] and not args.id_reuse_source:
+             parser.error(f"--id-reuse-source is required when --id-reuse-type is '{args.id_reuse_type}'.")
+        if args.id_reuse_type not in ['project', 'scan'] and args.id_reuse_source:
+             logger.warning(f"--id-reuse-source ('{args.id_reuse_source}') provided but --id-reuse-type is '{args.id_reuse_type}'. Source name will be ignored.")
+             args.id_reuse_source = None
+    elif args.command == 'show-results':
+        if not (args.show_licenses or args.show_components or args.show_policy_warnings or args.show_scan_metrics or args.show_dependencies):
+            parser.error("The 'show-results' command requires at least one --show-* flag.")
+
+    return args

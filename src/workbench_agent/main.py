@@ -1,12 +1,10 @@
-# workbench_agent/main.py
-
 import sys
 import time
 import logging
 import argparse
 from typing import Optional
 
-# Import components from other modules in the package
+# Import from other modules in the package
 from .cli import parse_cmdline_args
 from .api import Workbench
 from . import handlers
@@ -23,7 +21,6 @@ from .exceptions import (
     CompatibilityError
 )
 
-# --- Main Application Logic ---
 
 def main() -> int:
     """
@@ -64,7 +61,6 @@ def main() -> int:
             display_val = v
             if k == 'api_token' and params.log.upper() != 'DEBUG':
                  display_val = "****" if v else "Not Set"
-            # Format nicely
             print(f"  {k:<30} = {display_val}")
         print("------------------------------------")
         logger.debug("Parsed parameters: %s", params)
@@ -172,5 +168,3 @@ def main() -> int:
         print(f"\nTotal Execution Time: {duration_str}")
 
     return exit_code
-
-# Note: The if __name__ == "__main__": block is now in the top-level workbench-agent.py script.

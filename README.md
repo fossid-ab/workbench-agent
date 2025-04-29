@@ -108,7 +108,7 @@ workbench-agent scan \
     --project-name MYPROJ --scan-name MYSCAN01 \
     --path ./src \
     --run-dependency-analysis \
-    --show-components --show-licenses
+    --show-components --show-licenses --show-scan-metrics
 ```
 
 ### Scan using identification reuse from a specific project:
@@ -133,7 +133,7 @@ workbench-agent import-da \
 ```bash
 workbench-agent show-results \
     --project-name MYPROJ --scan-name MYSCAN01 \
-    --show-licenses --show-components
+    --show-licenses --show-components --show-dependencies --show-scan-metrics
 ```
 
 ### Evaluate gates for a scan (check pending IDs and policy violations):
@@ -141,7 +141,7 @@ workbench-agent show-results \
 ```bash
 workbench-agent evaluate-gates \
     --project-name MYPROJ --scan-name MYSCAN01 \
-    --policy-check --show-files
+    --show-files --fail-on policy
 ```
 
 (This command exits with code 0 if gates pass, 1 if they fail)
