@@ -11,8 +11,8 @@ Workbench Agent supports various operations for scanning your code and interacti
 *   Import Dependency Analysis results (e.g., `analyzer-result.json`).
 
 ### Results Options
-*   Fetch scan results (components, licenses, policy violations).
-*   Check scan status, pending identifications, and policy violations (Gate Evaluation).
+*   Fetch scan results (scanned file metrics, identified components and licenses, dependencies, policy violations).
+*   Check scan for pending identifications and policy violations with optional failure mode.
 *   Generate and download reports (scan or project scope) with a simplified naming scheme.
 
 ## Prerequisites
@@ -117,7 +117,8 @@ workbench-agent scan \
 workbench-agent scan \
     --project-name MYPROJ --scan-name MYSCAN02 \
     --path ./src \
-    --id-reuse --id-reuse-type project --id-reuse-source "MyBaseProject"
+    --id-reuse --id-reuse-type project --id-reuse-source "MyBaseProject" \
+    --show-components --show-licenses --show-dependencies
 ```
 
 ### Import DA results only:
@@ -125,7 +126,8 @@ workbench-agent scan \
 ```bash
 workbench-agent import-da \
     --project-name MYPROJ --scan-name MYSCAN03 \
-    --path ./ort-test-data/analyzer-result.json
+    --path ./ort-test-data/analyzer-result.json \
+    --show-dependencies
 ```
 
 ### Show results for an existing scan:
@@ -136,7 +138,7 @@ workbench-agent show-results \
     --show-licenses --show-components --show-dependencies --show-scan-metrics
 ```
 
-### Evaluate gates for a scan (check pending IDs and policy violations):
+### Evaluate gates for a scan (check pending IDs, show pending files, fail on policy violations):
 
 ```bash
 workbench-agent evaluate-gates \
