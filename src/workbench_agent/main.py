@@ -30,6 +30,7 @@ def main() -> int:
     """
     start_time = time.monotonic()
     exit_code = 1 # Default to failure
+    logger = None # Initialize logger variable
 
     try:
         params = parse_cmdline_args()
@@ -46,16 +47,14 @@ def main() -> int:
         console_handler = logging.StreamHandler(sys.stdout)
         console_formatter = logging.Formatter('%(levelname)s: %(message)s') # Simpler format for console
         console_handler.setFormatter(console_formatter)
-        # Set console level (e.g., INFO, unless global level is higher)
         console_handler.setLevel(logging.INFO if log_level <= logging.INFO else log_level)
         logging.getLogger().addHandler(console_handler)
 
-        # Get the root logger for the application after configuration
-        logger = logging.getLogger("log") # Use the same name as before for consistency
+        logger = logging.getLogger("agent")
 
+        # Print Configuration for this Run
         print("--- Workbench Agent Configuration ---")
         print(f"Command: {params.command}")
-        # Print parameters (mask token if not DEBUG)
         for k, v in sorted(params.__dict__.items()):
             if k == 'command': continue
             display_val = v
@@ -119,45 +118,25 @@ def main() -> int:
             exit_code = 1 # Failure
 
     # --- Unified Exception Handling ---
-    except ConfigurationError as e:
-        print(f"\nConfiguration Error: {e.message}")
-        logger.error(f"Configuration error: {e.message}", exc_info=False)
+    except (ConfigurationError, ValidationError, CompatibilityError) as e:
+        # Errors typically due to user input/setup, less need for full traceback in log
+        print(f"\nConfiguration/Validation Error: {e.message}")
+        if logger: logger.error("%s: %s", type(e).__name__, e.message, exc_info=False)
         exit_code = 1
-    except ValidationError as e:
-        print(f"\nValidation Error: {e.message}")
-        logger.error(f"Validation error: {e.message}", exc_info=False)
-        exit_code = 1
-    except ApiError as e:
-        print(f"\nAPI Error: {e.message}")
-        logger.error(f"API error: {e.message}", exc_info=True)
-        exit_code = 1
-    except NetworkError as e:
-        print(f"\nNetwork Error: {e.message}")
-        logger.error(f"Network error: {e.message}", exc_info=True)
-        exit_code = 1
-    except ProcessError as e:
-        print(f"\nProcess Error: {e.message}")
-        logger.error(f"Process error: {e.message}", exc_info=True)
-        exit_code = 1
-    except ProcessTimeoutError as e:
-        print(f"\nProcess Timeout: {e.message}")
-        logger.error(f"Process timeout: {e.message}", exc_info=True)
-        exit_code = 1
-    except FileSystemError as e:
-        print(f"\nFile System Error: {e.message}")
-        logger.error(f"File system error: {e.message}", exc_info=True)
-        exit_code = 1
-    except CompatibilityError as e:
-        print(f"\nCompatibility Error: {e.message}")
-        logger.error(f"Compatibility error: {e.message}", exc_info=False)
+    except (ApiError, NetworkError, ProcessError, ProcessTimeoutError, FileSystemError) as e:
+        # Errors during runtime interaction, traceback can be useful
+        print(f"\nRuntime Error: {e.message}")
+        if logger: logger.error("%s: %s", type(e).__name__, e.message, exc_info=True)
         exit_code = 1
     except WorkbenchAgentError as e:
+        # Catch any other specific agent errors that might be missed above
         print(f"\nWorkbench Agent Error: {e.message}")
-        logger.error(f"Workbench agent error: {e.message}", exc_info=True)
+        if logger: logger.error("Unhandled WorkbenchAgentError: %s", e.message, exc_info=True)
         exit_code = 1
     except Exception as e:
+        # Catch truly unexpected errors
         print(f"\nUnexpected Error: {e}")
-        logger.critical(f"Unexpected error: {e}", exc_info=True)
+        if logger: logger.critical("Unexpected error occurred", exc_info=True)
         exit_code = 1
     finally:
         # Calculate and print duration regardless of success/failure
@@ -166,5 +145,6 @@ def main() -> int:
         # Use the static method from Workbench class for formatting
         duration_str = Workbench.format_duration(duration_seconds)
         print(f"\nTotal Execution Time: {duration_str}")
+        if logger: logger.info("Total execution time: %s", duration_str)
 
     return exit_code

@@ -2,29 +2,11 @@
 
 import argparse
 import os
-import re
 import logging
 from argparse import RawTextHelpFormatter
-from typing import Optional, Dict, Any, List, Union, Tuple
 
 # Import Workbench to access report type constants
 from .api import Workbench
-from .exceptions import (
-    WorkbenchAgentError,
-    ApiError,
-    NetworkError,
-    ConfigurationError,
-    AuthenticationError,
-    ProcessError,
-    ProcessTimeoutError,
-    FileSystemError,
-    ValidationError,
-    CompatibilityError,
-    ProjectNotFoundError,
-    ScanNotFoundError,
-    ProjectExistsError,
-    ScanExistsError
-)
 
 logger = logging.getLogger(__name__)
 
