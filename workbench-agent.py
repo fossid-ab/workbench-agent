@@ -949,11 +949,12 @@ class CliWrapper:
 
         return result
 
-    def blind_scan(self, path):
+    def blind_scan(self, path, run_dependency_analysis):
         """
         Call fossid-cli on a given path in order to generate hashes of the files from that path
 
         Args:
+            run_dependency_analysis (bool): whether to run dependency analysis or not
             path (str): path of the code to be scanned
 
         Returns:
@@ -963,7 +964,13 @@ class CliWrapper:
         # Create temporary file, make it empty if already exists
         # pylint: disable-next=consider-using-with,unspecified-encoding
         open(temporary_file_path, "w").close()
-        my_cmd = f"timeout {self.timeout} {self.cli_path} --local --enable-sha1=1 {path} > {temporary_file_path}"
+        my_cmd = f"timeout {self.timeout} {self.cli_path} --local --enable-sha1=1 "
+
+        if run_dependency_analysis:
+            my_cmd += " --dependency-analysis=1 "
+
+        my_cmd += f" {path} > {temporary_file_path}"
+
         try:
             # pylint: disable-next=unspecified-encoding
             with open(temporary_file_path, "w") as outfile:
@@ -1345,7 +1352,7 @@ def main():
         print(cli_wrapper.get_version())
 
         # Run scan and save .fossid file as temporary file
-        blind_scan_result_path = cli_wrapper.blind_scan(params.path)
+        blind_scan_result_path = cli_wrapper.blind_scan(params.path, params.run_dependency_analysis)
         print(
             "Temporary file containing hashes generated at path: {}".format(
                 blind_scan_result_path
