@@ -1264,6 +1264,19 @@ def parse_cmdline_args():
     )
 
     args = parser.parse_args()
+
+    # block invalid combos
+    if args.blind_scan and args.run_dependency_analysis:
+        print("--run_dependency_analysis is not supported with --blind_scan")
+        sys.exit(1)
+    if args.blind_scan and args.run_only_dependency_analysis:
+        print("--run_only_dependency_analysis is not supported with --blind_scan")
+        sys.exit(1)
+    real_path = os.path.realpath(args.path)
+    if args.blind_scan and not os.path.isdir(real_path):
+        print("--path must be a directory when --blind_scan is used")
+        sys.exit(1)
+
     return args
 
 
