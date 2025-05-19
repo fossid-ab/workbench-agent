@@ -1264,6 +1264,12 @@ def parse_cmdline_args():
     )
 
     args = parser.parse_args()
+
+    real_path = os.path.realpath(args.path)
+    if args.blind_scan and not os.path.isdir(real_path):
+        print("--path must be a directory when --blind_scan is used")
+        sys.exit(1)
+
     return args
 
 
