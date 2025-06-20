@@ -797,7 +797,8 @@ class Workbench:
         identification_reuse_type: str = None,
         specific_code: str = None,
         advanced_match_scoring: bool = True,
-        match_filtering_threshold: int = -1
+        match_filtering_threshold: int = -1,
+        use_projectscan: bool = False
     ):
         """
 
@@ -815,6 +816,7 @@ class Workbench:
             advanced_match_scoring (bool):                  If true, scan will run with advanced match scoring.
             match_filtering_threshold (int):                Minimum length (in characters) of snippet to be considered
                                                             valid after applying intelligent match filtering.
+            use_projectscan (bool):                         Use project scan instead of scan with classic file scan.
         Returns:
 
         """
@@ -861,6 +863,9 @@ class Workbench:
                 data["specific_code"] = specific_code
             else:
                 data["identification_reuse_type"] = identification_reuse_type
+
+        if use_projectscan:
+            payload["data"]["use_projectscan"] = "1"
 
         response = self._send_request(payload)
         if response["status"] != "1":
@@ -1262,6 +1267,13 @@ def parse_cmdline_args():
         action="store_true",
         default=False,
     )
+    optional.add_argument(
+        "--use_projectscan",
+        help="Use project scan instead of scan with classic file scan.\n",
+        action="store_true",
+        default=False,
+        required=False,
+    )
 
     args = parser.parse_args()
     return args
@@ -1447,7 +1459,8 @@ def main():
             params.identification_reuse_type,
             params.specific_code,
             params.advanced_match_scoring,
-            params.match_filtering_threshold
+            params.match_filtering_threshold,
+            params.use_projectscan
          )
         # Check if finished based on: scan_number_of_tries X scan_wait_time until throwing an error
         workbench.wait_for_scan_to_finish(

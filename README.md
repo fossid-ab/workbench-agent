@@ -129,6 +129,7 @@ usage: workbench-agent.py [-h] --api_url API_URL --api_user API_USER
                           [--get_scan_identified_components]
                           [--scans_get_policy_warnings_counter]
                           [--projects_get_policy_warnings_info]
+                          [--use_projectscan]
 
 Run FossID Workbench Agent
 
@@ -207,6 +208,7 @@ optional arguments:
                         When passing this parameter the agent will return information about policy warnings for project,
                         including the warnings counter.
                         This argument expects no value, not passing this argument is equivalent to assigning false.
+  --use_projectscan     Experimental projectscan feature.
 
 ```
 
