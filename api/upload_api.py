@@ -3,11 +3,7 @@ import os
 import logging
 from .helpers.upload_helpers import UploadHelper
 from .helpers.exceptions import (
-    ApiError,
-    NetworkError,
-    FileSystemError,
-    ScanNotFoundError,
-    AuthenticationError
+    FileSystemError
 )
 
 logger = logging.getLogger("workbench-agent")
@@ -50,7 +46,6 @@ class UploadAPI(UploadHelper):
         
         if use_chunked:
             # First delete possible existing files because chunk uploading works by appending existing file on disk
-            # This method is available when UploadAPI is mixed with ScansAPI (e.g., in WorkbenchAPI)
             if hasattr(self, 'remove_uploaded_content'):
                 self.remove_uploaded_content(filename, scan_code)
             else:
