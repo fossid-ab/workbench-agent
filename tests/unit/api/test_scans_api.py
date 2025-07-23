@@ -147,7 +147,7 @@ def test_start_dependency_analysis_failure(mock_send, scans_api_inst):
 
 
 # --- Test wait_for_scan_to_finish ---
-@patch.object(ScansAPI, "_get_scan_status")
+@patch.object(ScansAPI, "check_status")
 @patch("time.sleep")  # Mock sleep to speed up tests
 @patch("builtins.print")  # Mock print to avoid output during tests
 def test_wait_for_scan_to_finish_success(mock_print, mock_sleep, mock_get_status, scans_api_inst):
@@ -171,7 +171,7 @@ def test_wait_for_scan_to_finish_success(mock_print, mock_sleep, mock_get_status
     mock_sleep.assert_called_once_with(1)
 
 
-@patch.object(ScansAPI, "_get_scan_status")
+@patch.object(ScansAPI, "check_status")
 @patch("time.sleep")
 @patch("builtins.print")
 def test_wait_for_scan_to_finish_timeout(mock_print, mock_sleep, mock_get_status, scans_api_inst):

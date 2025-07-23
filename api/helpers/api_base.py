@@ -152,34 +152,4 @@ class APIBase(ProcessWaiters, StatusCheckers):
             elif is_create_action and ("Scan code already exists" in error_msg or "Legacy.controller.scans.code_already_exists" in error_msg):
                 raise ScanExistsError(f"Scan already exists")
 
-    def _get_scan_status(self, scan_type: str, scan_code: str) -> Dict[str, Any]:
-        """
-        Internal method to get scan status. Used by helper mixins.
-        
-        Args:
-            scan_type: One of these: SCAN, REPORT_IMPORT, DEPENDENCY_ANALYSIS, REPORT_GENERATION, DELETE_SCAN
-            scan_code: The unique identifier for the scan
 
-        Returns:
-            dict: The data section from the JSON response returned from API
-
-        Raises:
-            ApiError: If the API call fails
-            ScanNotFoundError: If the scan doesn't exist
-        """
-        payload = {
-            "group": "scans",
-            "action": "check_status",
-            "data": {
-                "scan_code": scan_code,
-                "type": scan_type,
-            },
-        }
-        response = self._send_request(payload)
-        if response.get("status") == "1" and "data" in response:
-            return response["data"]
-        else:
-            error_msg = response.get("error", f"Unexpected response: {response}")
-            if "Scan not found" in error_msg or "row_not_found" in error_msg:
-                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to get {scan_type} status for scan '{scan_code}': {error_msg}", details=response)
