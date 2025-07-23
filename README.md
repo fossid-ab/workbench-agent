@@ -63,9 +63,8 @@ api/
 ### Prerequisites
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+# Install dependencies (development + test)
+pip install -e .[dev,test]
 
 # Install pre-commit hooks (optional)
 pre-commit install
@@ -75,16 +74,15 @@ pre-commit install
 
 ```bash
 # Run all tests
-python3 run_tests.py
+python3 -m pytest tests/unit/ -v
 
 # Run specific API tests
-python3 run_tests.py projects
-python3 run_tests.py scans  
-python3 run_tests.py workbench
-python3 run_tests.py vulnerabilities
+python3 -m pytest tests/unit/api/test_projects_api.py -v
+python3 -m pytest tests/unit/api/test_scans_api.py -v
+python3 -m pytest tests/unit/api/test_workbench_api.py -v
+python3 -m pytest tests/unit/api/test_vulnerabilities_api.py -v
 
-# Using pytest directly
-python3 -m pytest tests/unit/ -v
+# Run with coverage
 python3 -m pytest tests/unit/ --cov=api --cov-report=term-missing
 ```
 
@@ -166,8 +164,8 @@ wb.create_project("my_project")
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run the test suite: `python3 run_tests.py`
-5. Check code quality: `python3 -m black api/ tests/ && python3 -m flake8 api/`
+4. Run the test suite: `python3 -m pytest tests/unit/ -v`
+5. Check code quality: `python3 -m black api/ tests/`
 6. Submit a pull request
 
 ## License

@@ -5,11 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v1
-      - name: Code linters
+      - name: Code formatting check
         run: |
-          pip install -r requirements.txt
-          pycodestyle workbench-agent.py
-          pylint --errors-only --rcfile .pylintrc workbench-agent.py
+          pip install -e .[dev]
+          black --check workbench-agent.py api/
           
           
 

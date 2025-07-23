@@ -23,7 +23,7 @@ tests/
 
 Install testing dependencies:
 ```bash
-pip install -r requirements-test.txt
+pip install -e .[dev,test]
 ```
 
 ### Run All Tests
@@ -31,23 +31,23 @@ pip install -r requirements-test.txt
 # Using pytest directly
 python3 -m pytest tests/unit/api/ -v
 
-# Using the test runner script
-python3 run_tests.py
+# Using pytest directly
+python3 -m pytest tests/unit/ -v
 ```
 
 ### Run Specific Test Modules
 ```bash
 # Projects API tests
-python3 run_tests.py projects
+python3 -m pytest tests/unit/api/test_projects_api.py -v
 
 # Scans API tests  
-python3 run_tests.py scans
+python3 -m pytest tests/unit/api/test_scans_api.py -v
 
 # Workbench API integration tests
-python3 run_tests.py workbench
+python3 -m pytest tests/unit/api/test_workbench_api.py -v
 
 # Vulnerabilities API tests
-python3 run_tests.py vulnerabilities
+python3 -m pytest tests/unit/api/test_vulnerabilities_api.py -v
 ```
 
 ### Run Individual Test Functions
