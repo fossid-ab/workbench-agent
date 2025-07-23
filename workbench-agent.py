@@ -4,7 +4,6 @@
 
 import builtins
 import json
-import time
 import logging
 import argparse
 import random
