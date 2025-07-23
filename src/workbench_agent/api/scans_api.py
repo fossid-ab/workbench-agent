@@ -1,7 +1,7 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from .helpers.api_base import APIBase
-from .helpers.exceptions import ApiError, ScanNotFoundError, ScanExistsError
+from ..exceptions import ApiError, ScanNotFoundError, ScanExistsError
 from .helpers.project_scan_checks import check_if_scan_exists
 
 logger = logging.getLogger("workbench-agent")
@@ -12,8 +12,46 @@ class ScansAPI(APIBase):
     Workbench API Scans Operations.
     """
 
+    def list_scans(self) -> List[Dict[str, Any]]:
+        """
+        List all scans accessible to the current user.
+
+        Returns:
+            List[Dict]: List of scan dictionaries with keys like code, name, project_code, etc.
+
+        Raises:
+            ApiError: If the API call fails
+            NetworkError: If there are network issues
+        """
+        logger.debug("Listing all scans")
+
+        payload = {
+            "group": "scans",
+            "action": "get_all_scans",
+            "data": {}
+        }
+
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            scans = response["data"]
+            if isinstance(scans, list):
+                logger.debug(f"Found {len(scans)} scans")
+                return scans
+            elif isinstance(scans, dict):
+                # Sometimes API returns dict instead of list
+                logger.debug(f"Found {len(scans)} scans (as dict)")
+                return list(scans.values()) if scans else []
+            else:
+                logger.warning(f"Expected list or dict for scans, got {type(scans)}")
+                return []
+        else:
+            error_msg = response.get("error", f"Unexpected response: {response}")
+            raise ApiError(f"Failed to list scans: {error_msg}", details=response)
+
+
+
     def create_webapp_scan(
-        self, scan_code: str, project_code: str = None, target_path: str = None
+        self, scan_code: str, project_code: str = None
     ) -> int:
         """
         Creates a Scan in Workbench. The scan can optionally be created inside a Project.
@@ -21,7 +59,6 @@ class ScansAPI(APIBase):
         Args:
             scan_code: The unique identifier for the scan
             project_code: The project code within which to create the scan
-            target_path: The target path where scan is stored
 
         Returns:
             int: The scan ID of the created scan
@@ -40,7 +77,6 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
                 "scan_name": scan_code,
                 "project_code": project_code,
-                "target_path": target_path,
                 "description": "Scan created using the Workbench Agent.",
             },
         }

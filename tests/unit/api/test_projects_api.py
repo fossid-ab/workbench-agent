@@ -6,7 +6,7 @@ import builtins
 from unittest.mock import MagicMock, patch, Mock
 
 # Import from our API structure
-from api.projects_api import ProjectsAPI
+from workbench_agent.api.projects_api import ProjectsAPI
 
 
 # --- Fixtures ---
@@ -110,7 +110,7 @@ def test_projects_get_policy_warnings_info_success(mock_send, projects_api_inst)
 @patch.object(ProjectsAPI, "_send_request")
 def test_projects_get_policy_warnings_info_failure(mock_send, projects_api_inst):
     """Test policy warnings retrieval failure."""
-    from api.helpers.exceptions import ApiError
+    from workbench_agent.exceptions import ApiError
     mock_send.return_value = {"status": "0", "error": "Project not found"}
 
     with pytest.raises(ApiError) as exc_info:
@@ -122,7 +122,7 @@ def test_projects_get_policy_warnings_info_failure(mock_send, projects_api_inst)
 @patch.object(ProjectsAPI, "_send_request")
 def test_projects_get_policy_warnings_info_no_data(mock_send, projects_api_inst):
     """Test policy warnings retrieval when no data key in response."""
-    from api.helpers.exceptions import ApiError
+    from workbench_agent.exceptions import ApiError
     mock_send.return_value = {"status": "1"}  # No "data" key
 
     with pytest.raises(ApiError) as exc_info:

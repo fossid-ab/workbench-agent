@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: workbench-agent
+Version: 0.7.1
+Summary: FossID Workbench Agent - Modular API client for automated scanning
+Requires-Python: >=3.9
+License-File: LICENSE
+Requires-Dist: requests
+Requires-Dist: python-dotenv
+Provides-Extra: dev
+Requires-Dist: black; extra == "dev"
+Provides-Extra: test
+Requires-Dist: pytest>=7.0.0; extra == "test"
+Requires-Dist: pytest-mock>=3.6.1; extra == "test"
+Requires-Dist: requests>=2.25.1; extra == "test"
+Dynamic: license-file

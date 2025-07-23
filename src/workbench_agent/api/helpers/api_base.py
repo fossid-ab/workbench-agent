@@ -2,7 +2,7 @@ import json
 import logging
 import requests
 from typing import Dict, Any
-from .exceptions import (
+from ...exceptions import (
     ApiError,
     NetworkError,
     AuthenticationError,

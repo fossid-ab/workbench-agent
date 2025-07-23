@@ -1,7 +1,7 @@
 import logging
 import requests
 from typing import Callable, Dict, Any, List
-from .exceptions import ApiError, ProcessError, NetworkError, ValidationError, ProcessTimeoutError
+from ...exceptions import ApiError, ProcessError, NetworkError, ValidationError, ProcessTimeoutError
 
 logger = logging.getLogger("workbench-agent")
 
@@ -305,7 +305,7 @@ class StatusCheckers:
                         f"  - {operation_type_upper}: Status is {current_status}. Waiting for completion..."
                     )
                     try:
-                        self.wait_for_scan_to_finish(
+                        status_data, duration = self.wait_for_scan_to_finish(
                             operation_type_upper,
                             scan_code,
                             params.scan_number_of_tries,

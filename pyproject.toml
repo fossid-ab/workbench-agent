@@ -3,7 +3,7 @@ requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 
 [project]
 name = "workbench-agent"
-version = "0.7.1"
+version = "0.8.0"
 description = "FossID Workbench Agent - Modular API client for automated scanning"
 requires-python = ">=3.9"
 dependencies = [
@@ -40,6 +40,9 @@ exclude = '''
   | inspiration
 )/
 '''
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.isort]
 profile = "black"

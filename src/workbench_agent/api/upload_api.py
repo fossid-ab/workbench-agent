@@ -2,7 +2,7 @@ import base64
 import os
 import logging
 from .helpers.upload_helpers import UploadHelper
-from .helpers.exceptions import FileSystemError
+from ..exceptions import FileSystemError
 
 logger = logging.getLogger("workbench-agent")
 

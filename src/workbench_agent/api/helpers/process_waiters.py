@@ -1,7 +1,7 @@
 import time
 import logging
 from typing import Callable, List, Dict, Any, Tuple
-from .exceptions import ProcessTimeoutError, ApiError, ProcessError
+from ...exceptions import ProcessTimeoutError, ApiError, ProcessError
 
 logger = logging.getLogger("workbench-agent")
 
@@ -48,8 +48,12 @@ class ProcessWaiters:
         """
         logger.debug(f"Waiting for {process_description}...")
         last_status = "UNKNOWN"
+        last_state = ""
+        last_step = ""
         start_time = time.time()
+        client_start_time = time.time()
         status_data = None
+        api_start_time = None
 
         for i in range(max_tries):
             current_status = "UNKNOWN"
@@ -81,13 +85,46 @@ class ProcessWaiters:
             # Check for Success
             if current_status in success_values:
                 print()
-                duration = time.time() - start_time
+                
+                # Calculate duration using API timestamps if available
+                duration_str = ""
+                api_finish_time = status_data.get("finished") if isinstance(status_data, dict) else None
+                api_duration_sec = None
+                
+                if api_start_time and api_finish_time:
+                    try:
+                        # Parse timestamps and calculate duration
+                        from datetime import datetime
+                        start_dt = datetime.strptime(api_start_time, "%Y-%m-%d %H:%M:%S")
+                        finish_dt = datetime.strptime(api_finish_time, "%Y-%m-%d %H:%M:%S")
+                        api_duration_sec = (finish_dt - start_dt).total_seconds()
+                        
+                        # Format duration as a string
+                        minutes, seconds = divmod(api_duration_sec, 60)
+                        hours, minutes = divmod(minutes, 60)
+                        if hours > 0:
+                            duration_str = f" (Completed in {int(hours)}h {int(minutes)}m {int(seconds)}s)"
+                        elif minutes > 0:
+                            duration_str = f" (Completed in {int(minutes)}m {int(seconds)}s)"
+                        else:
+                            duration_str = f" (Completed in {int(seconds)}s)"
+                    except Exception as e:
+                        logger.debug(f"Error calculating duration: {e}")
+                
+                # Calculate client-side duration as fallback
+                client_duration = time.time() - client_start_time
+                
+                # Prefer API-reported duration if available, otherwise use client-side duration
+                final_duration = api_duration_sec if api_duration_sec is not None else client_duration
+                
                 logger.debug(
                     f"{process_description} completed successfully (Status: {current_status})."
                 )
+                print(f"{process_description} completed successfully{duration_str}.")
+                
                 if status_data:
-                    status_data["_duration_seconds"] = duration
-                return status_data or {}, duration
+                    status_data["_duration_seconds"] = final_duration
+                return status_data or {}, final_duration
 
             # Check for Failure (includes ACCESS_ERROR)
             if current_status in failure_values or current_status == "ACCESS_ERROR":
@@ -102,15 +139,73 @@ class ProcessWaiters:
                     base_error_msg += f". Detail: {error_detail}"
                 raise ProcessError(base_error_msg, details=status_data)
 
-            # Basic Status Printing
-            if current_status != last_status or i < 2 or i % 10 == 0:
+            # Extract additional status information for enhanced progress reporting
+            current_state = ""
+            current_step = ""
+            progress_info = ""
+            
+            if isinstance(status_data, dict):
+                current_state = status_data.get("state", "")
+                current_step = status_data.get("current_step", "")
+                
+                # Get operation start time from API if available and not already set
+                if not api_start_time:
+                    api_start_time = status_data.get("started")
+                
+                # Extract file processing information if available
+                total_files = status_data.get("total_files", 0)
+                current_file_idx = status_data.get("current_file", 0)
+                percentage = status_data.get("percentage_done", "")
+                current_filename = status_data.get("current_filename", "")
+                
+                # Create progress info if available
+                if total_files and int(total_files) > 0:
+                    progress_info = f" - File {current_file_idx}/{total_files}"
+                    if percentage:
+                        progress_info += f" ({percentage})"
+                elif percentage:
+                    progress_info = f" - {percentage}"
+                
+                # Add current filename if available and not too long
+                if current_filename and len(current_filename) < 50:
+                    progress_info += f" - {current_filename}"
+
+            # Enhanced Status Printing with more context
+            details_changed = (
+                current_status != last_status or 
+                current_state != last_state or 
+                current_step != last_step
+            )
+            
+            # Print a new line on first status check
+            if i == 0:
+                details_changed = True
+                
+            # Print a new line every 10 status checks to update the user
+            show_periodic_update = i > 0 and i % 10 == 0 and current_status == "RUNNING"
+            
+            if details_changed or show_periodic_update:
                 print()
-                print(
-                    f"{process_description} status: {current_status}. Attempt {i+1}/{max_tries}.",
-                    end="",
-                    flush=True,
-                )
+                
+                # Construct a detailed status message
+                status_msg = f"{process_description} status: {current_status}"
+                if current_state:
+                    status_msg += f" ({current_state})"
+                
+                # Include progress information
+                if progress_info:
+                    status_msg += progress_info
+                
+                # Show current step
+                if current_step:
+                    status_msg += f" - Step: {current_step}"
+                    
+                print(f"{status_msg}. Attempt {i+1}/{max_tries}", end="", flush=True)
+                
+                # Update last values
                 last_status = current_status
+                last_state = current_state
+                last_step = current_step
             elif progress_indicator:
                 print(".", end="", flush=True)
 
@@ -137,7 +232,7 @@ class ProcessWaiters:
         scan_wait_time: int,
     ) -> Tuple[Dict[str, Any], float]:
         """
-        Wait for a scan to complete using the consolidated implementation.
+        Wait for a scan to complete using the enhanced implementation with detailed progress reporting.
 
         Args:
             scan_type: Types: SCAN, DEPENDENCY_ANALYSIS
@@ -159,6 +254,8 @@ class ProcessWaiters:
             operation_name = "Dependency Analysis"
         else:
             operation_name = scan_type
+
+        logger.debug(f"Waiting for {scan_type} operation to complete for scan '{scan_code}'...")
 
         return self._wait_for_process(
             process_description=operation_name,

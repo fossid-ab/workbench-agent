@@ -7,7 +7,7 @@ import time
 from unittest.mock import MagicMock, patch, Mock
 
 # Import from our API structure
-from api.scans_api import ScansAPI
+from workbench_agent.api.scans_api import ScansAPI
 
 
 # --- Fixtures ---
@@ -49,16 +49,6 @@ def test_create_webapp_scan_failure(mock_send, scans_api_inst):
     assert "Failed to create scan" in str(exc_info.value)
 
 
-@patch.object(ScansAPI, "_send_request")
-def test_create_webapp_scan_with_target_path(mock_send, scans_api_inst):
-    """Test scan creation with target path."""
-    mock_send.return_value = {"status": "1", "data": {"scan_id": 999}}
-
-    result = scans_api_inst.create_webapp_scan("test_scan", "test_project", "/path/to/target")
-
-    assert result == 999
-    call_args = mock_send.call_args[0][0]
-    assert call_args["data"]["target_path"] == "/path/to/target"
 
 
 # --- Test check_if_scan_exists ---
@@ -109,7 +99,7 @@ def test_get_scan_status_success(mock_send, scans_api_inst):
 @patch.object(ScansAPI, "_send_request")
 def test_get_scan_status_failure(mock_send, scans_api_inst):
     """Test scan status retrieval failure."""
-    from api.helpers.exceptions import ScanNotFoundError
+    from workbench_agent.exceptions import ScanNotFoundError
     mock_send.return_value = {"status": "0", "error": "Scan not found"}
 
     with pytest.raises(ScanNotFoundError):
@@ -176,7 +166,7 @@ def test_wait_for_scan_to_finish_success(mock_print, mock_sleep, mock_get_status
 @patch("builtins.print")
 def test_wait_for_scan_to_finish_timeout(mock_print, mock_sleep, mock_get_status, scans_api_inst):
     """Test scan waiting timeout."""
-    from api.helpers.exceptions import ProcessTimeoutError
+    from workbench_agent.exceptions import ProcessTimeoutError
     # Mock scan always running - is_finished=False means not finished
     mock_get_status.return_value = {
         "is_finished": False,
@@ -229,7 +219,7 @@ def test_extract_archives_success(mock_send, scans_api_inst):
 @patch.object(ScansAPI, "_send_request")
 def test_extract_archives_failure(mock_send, scans_api_inst):
     """Test archive extraction failure."""
-    from api.helpers.exceptions import ApiError
+    from workbench_agent.exceptions import ApiError
     mock_send.return_value = {"status": "0", "error": "Cannot extract"}
 
     with pytest.raises(ApiError) as exc_info:

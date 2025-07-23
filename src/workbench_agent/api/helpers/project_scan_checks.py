@@ -15,7 +15,7 @@ def check_if_project_exists(send_request_func: Callable, project_code: str) -> b
     Returns:
         bool: True if project exists, False otherwise
     """
-    from .exceptions import ProjectNotFoundError
+    from ...exceptions import ProjectNotFoundError
 
     logger.debug(f"Checking if project '{project_code}' exists")
 
@@ -59,7 +59,7 @@ def check_if_scan_exists(send_request_func: Callable, scan_code: str) -> bool:
     Returns:
         bool: True if scan exists, False otherwise
     """
-    from .exceptions import ScanNotFoundError
+    from ...exceptions import ScanNotFoundError
 
     logger.debug(f"Checking if scan '{scan_code}' exists")
 

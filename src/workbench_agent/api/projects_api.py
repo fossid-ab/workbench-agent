@@ -1,7 +1,7 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from .helpers.api_base import APIBase
-from .helpers.exceptions import ApiError, ProjectNotFoundError, ProjectExistsError
+from ..exceptions import ApiError, ProjectNotFoundError, ProjectExistsError
 from .helpers.project_scan_checks import check_if_project_exists
 
 logger = logging.getLogger("workbench-agent")
@@ -23,6 +23,87 @@ class ProjectsAPI(APIBase):
             bool: True if project exists, False otherwise
         """
         return check_if_project_exists(self._send_request, project_code)
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """
+        List all projects accessible to the current user.
+
+        Returns:
+            List[Dict]: List of project dictionaries with keys like project_code, project_name, etc.
+
+        Raises:
+            ApiError: If the API call fails
+            NetworkError: If there are network issues
+        """
+        logger.debug("Listing all projects")
+
+        payload = {
+            "group": "projects",
+            "action": "get_all_projects",
+            "data": {}
+        }
+
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            projects = response["data"]
+            if isinstance(projects, list):
+                logger.debug(f"Found {len(projects)} projects")
+                return projects
+            elif isinstance(projects, dict):
+                # Sometimes API returns dict instead of list
+                logger.debug(f"Found {len(projects)} projects (as dict)")
+                return list(projects.values()) if projects else []
+            else:
+                logger.warning(f"Expected list or dict for projects, got {type(projects)}")
+                return []
+        else:
+            error_msg = response.get("error", f"Unexpected response: {response}")
+            raise ApiError(f"Failed to list projects: {error_msg}", details=response)
+
+    def get_project_scans(self, project_code: str) -> List[Dict[str, Any]]:
+        """
+        Get all scans for a specific project.
+
+        Args:
+            project_code: The project code to get scans for
+
+        Returns:
+            List[Dict]: List of scan dictionaries for the specified project
+
+        Raises:
+            ApiError: If the API call fails
+            NetworkError: If there are network issues
+        """
+        logger.debug(f"Getting scans for project '{project_code}'")
+
+        payload = {
+            "group": "projects",
+            "action": "get_all_scans",
+            "data": {
+                "project_code": project_code
+            }
+        }
+
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            scans = response["data"]
+            if isinstance(scans, list):
+                logger.debug(f"Found {len(scans)} scans for project '{project_code}'")
+                return scans
+            elif isinstance(scans, dict):
+                # Sometimes API returns dict instead of list
+                logger.debug(f"Found {len(scans)} scans for project '{project_code}' (as dict)")
+                return list(scans.values()) if scans else []
+            else:
+                logger.warning(f"Expected list or dict for project scans, got {type(scans)}")
+                return []
+        else:
+            error_msg = response.get("error", f"Unexpected response: {response}")
+            # Don't raise error for project not found - just return empty list
+            if "Project does not exist" in error_msg or "row_not_found" in error_msg:
+                logger.debug(f"Project '{project_code}' not found, returning empty scan list")
+                return []
+            raise ApiError(f"Failed to get scans for project '{project_code}': {error_msg}", details=response)
 
     def create_project(self, project_code: str):
         """

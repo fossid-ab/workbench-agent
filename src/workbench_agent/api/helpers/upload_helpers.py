@@ -7,7 +7,7 @@ import time
 import os
 
 from .api_base import APIBase
-from .exceptions import NetworkError, ApiError, FileSystemError
+from ...exceptions import NetworkError, ApiError, FileSystemError
 
 logger = logging.getLogger("workbench-agent")
 

@@ -6,7 +6,7 @@ import builtins
 from unittest.mock import MagicMock, patch, Mock
 
 # Import from our API structure
-from api.workbench_api import WorkbenchAPI
+from workbench_agent.api.workbench_api import WorkbenchAPI
 
 
 # --- Fixtures ---
@@ -177,7 +177,7 @@ def test_workbench_alias_compatibility():
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../.."))
 
-    from api import WorkbenchAPI
+    from workbench_agent.api import WorkbenchAPI
 
     # The alias should be the same class
     assert WorkbenchAPI is not None
