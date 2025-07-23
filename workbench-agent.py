@@ -8,14 +8,11 @@ import time
 import logging
 import argparse
 import random
-import base64
-import io
 import os
 import subprocess
 from argparse import RawTextHelpFormatter
 import sys
 import traceback
-import requests
 
 # Import the new API structure
 from api import WorkbenchAPI
