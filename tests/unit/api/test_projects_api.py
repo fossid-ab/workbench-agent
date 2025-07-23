@@ -110,23 +110,25 @@ def test_projects_get_policy_warnings_info_success(mock_send, projects_api_inst)
 @patch.object(ProjectsAPI, "_send_request")
 def test_projects_get_policy_warnings_info_failure(mock_send, projects_api_inst):
     """Test policy warnings retrieval failure."""
+    from api.helpers.exceptions import ApiError
     mock_send.return_value = {"status": "0", "error": "Project not found"}
 
-    with pytest.raises(builtins.Exception) as exc_info:
+    with pytest.raises(ApiError) as exc_info:
         projects_api_inst.projects_get_policy_warnings_info("nonexistent_project")
 
-    assert "Error getting project policy warnings information" in str(exc_info.value)
+    assert "Failed to get policy warnings info" in str(exc_info.value)
 
 
 @patch.object(ProjectsAPI, "_send_request")
 def test_projects_get_policy_warnings_info_no_data(mock_send, projects_api_inst):
     """Test policy warnings retrieval when no data key in response."""
+    from api.helpers.exceptions import ApiError
     mock_send.return_value = {"status": "1"}  # No "data" key
 
-    with pytest.raises(builtins.Exception) as exc_info:
+    with pytest.raises(ApiError) as exc_info:
         projects_api_inst.projects_get_policy_warnings_info("test_project")
 
-    assert "Error getting project policy warnings information" in str(exc_info.value)
+    assert "Failed to get policy warnings info" in str(exc_info.value)
 
 
 # --- Test API Base Integration ---

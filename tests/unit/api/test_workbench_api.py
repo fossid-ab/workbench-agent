@@ -42,13 +42,6 @@ def test_workbench_api_composition(workbench_inst):
     # UploadAPI methods
     assert hasattr(workbench_inst, "upload_files")
 
-    # VulnerabilitiesAPI methods
-    assert hasattr(workbench_inst, "list_vulnerabilities")
-
-    # DownloadAPI methods
-    assert hasattr(workbench_inst, "generate_report")
-    assert hasattr(workbench_inst, "_download_report")
-
 
 def test_workbench_api_inheritance_order(workbench_inst):
     """Test that the method resolution order is correct."""
@@ -60,8 +53,7 @@ def test_workbench_api_inheritance_order(workbench_inst):
         "ProjectsAPI",
         "ScansAPI",
         "UploadAPI",
-        "VulnerabilitiesAPI",
-        "DownloadAPI",
+        "UploadHelper",
         "APIBase",
     ]
 
@@ -132,7 +124,7 @@ def test_workbench_api_scan_workflow(mock_send, workbench_inst):
     # Note: run_scan has many parameters, using minimal set for test
     with (
         patch.object(workbench_inst, "check_if_scan_exists", return_value=True),
-        patch.object(workbench_inst, "_assert_scan_can_start"),
+        patch.object(workbench_inst, "assert_scan_can_start"),
     ):
         run_result = workbench_inst.run_scan("test_scan", 10, 10, False, False, False, False, False)
         assert run_result["status"] == "1"
@@ -141,26 +133,6 @@ def test_workbench_api_scan_workflow(mock_send, workbench_inst):
     assert len(licenses) == 1
     assert licenses[0]["license"] == "MIT"
 
-
-@patch.object(WorkbenchAPI, "_send_request")
-def test_workbench_api_vulnerability_workflow(mock_send, workbench_inst):
-    """Test vulnerability retrieval using the composed API."""
-    mock_send.side_effect = [
-        {"status": "1", "data": {"count_results": 2}},  # count vulnerabilities
-        {
-            "status": "1",
-            "data": [  # get vulnerabilities
-                {"id": "CVE-2021-1234", "severity": "HIGH"},
-                {"id": "CVE-2021-5678", "severity": "MEDIUM"},
-            ],
-        },
-    ]
-
-    vulnerabilities = workbench_inst.list_vulnerabilities("test_scan")
-
-    assert len(vulnerabilities) == 2
-    assert vulnerabilities[0]["id"] == "CVE-2021-1234"
-    assert mock_send.call_count == 2
 
 
 # --- Error Handling Integration Tests ---

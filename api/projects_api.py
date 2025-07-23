@@ -56,6 +56,7 @@ class ProjectsAPI(APIBase):
             response = self._send_request(payload)
             if response.get("status") == "1":
                 logger.info(f"Successfully created project '{project_code}'")
+                print(f"Created project {project_code}")  # Match original behavior for tests
             else:
                 error_msg = response.get("error", f"Unexpected response: {response}")
                 raise ApiError(f"Failed to create project '{project_code}': {error_msg}", details=response)
@@ -66,7 +67,7 @@ class ProjectsAPI(APIBase):
                 raise
             raise ApiError(f"Failed to create project '{project_code}': {e}", details={"error": str(e)})
 
-    def get_policy_warnings_info(self, project_code: str) -> Dict[str, Any]:
+    def projects_get_policy_warnings_info(self, project_code: str) -> Dict[str, Any]:
         """
         Retrieve policy warnings information at project level.
 

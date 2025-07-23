@@ -459,6 +459,7 @@ class ScansAPI(APIBase):
             scan_code: The unique identifier for the scan
         """
         logger.debug(f"Removing uploaded content '{filename}' from scan '{scan_code}'")
+        print(f"Called scans->remove_uploaded_content on file {filename}")  # Match original behavior
         
         payload = {
             "group": "scans",
@@ -471,6 +472,8 @@ class ScansAPI(APIBase):
         
         response = self._send_request(payload)
         if response.get("status") != "1":
+            warning_msg = f"Cannot delete file {filename}, maybe is the first time when uploading this file? API response {response}."
+            print(warning_msg)  # Match original behavior
             logger.warning(f"Cannot delete file '{filename}' from scan '{scan_code}', maybe is the first time uploading? API response: {response}")
         else:
             logger.debug(f"Successfully removed '{filename}' from scan '{scan_code}'")

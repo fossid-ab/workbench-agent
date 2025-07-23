@@ -86,7 +86,7 @@ def test_check_if_scan_exists_false(mock_send, scans_api_inst):
     assert result is False
 
 
-# --- Test _get_scan_status ---
+# --- Test get_scan_status ---
 @patch.object(ScansAPI, "_send_request")
 def test_get_scan_status_success(mock_send, scans_api_inst):
     """Test successful scan status retrieval."""
@@ -96,7 +96,7 @@ def test_get_scan_status_success(mock_send, scans_api_inst):
     }
     mock_send.return_value = mock_response
 
-    result = scans_api_inst._get_scan_status("SCAN", "test_scan")
+    result = scans_api_inst.get_scan_status("SCAN", "test_scan")
 
     assert result == mock_response["data"]
     call_args = mock_send.call_args[0][0]
@@ -109,23 +109,25 @@ def test_get_scan_status_success(mock_send, scans_api_inst):
 @patch.object(ScansAPI, "_send_request")
 def test_get_scan_status_failure(mock_send, scans_api_inst):
     """Test scan status retrieval failure."""
+    from api.helpers.exceptions import ScanNotFoundError
     mock_send.return_value = {"status": "0", "error": "Scan not found"}
 
-    with pytest.raises(builtins.Exception) as exc_info:
-        scans_api_inst._get_scan_status("SCAN", "nonexistent_scan")
-
-    assert "Failed to retrieve scan status" in str(exc_info.value)
+    with pytest.raises(ScanNotFoundError):
+        scans_api_inst.get_scan_status("SCAN", "nonexistent_scan")
 
 
 # --- Test start_dependency_analysis ---
+@patch.object(ScansAPI, "assert_dependency_analysis_can_start")
 @patch.object(ScansAPI, "_send_request")
-def test_start_dependency_analysis_success(mock_send, scans_api_inst):
+def test_start_dependency_analysis_success(mock_send, mock_assert, scans_api_inst):
     """Test successful dependency analysis start."""
     mock_send.return_value = {"status": "1", "data": {"message": "Started"}}
+    mock_assert.return_value = None  # No exception means can start
 
     # Should not raise exception
     scans_api_inst.start_dependency_analysis("test_scan")
 
+    mock_assert.assert_called_once_with("test_scan")
     mock_send.assert_called_once()
     call_args = mock_send.call_args[0][0]
     assert call_args["group"] == "scans"
@@ -159,7 +161,12 @@ def test_wait_for_scan_to_finish_success(mock_print, mock_sleep, mock_get_status
 
     result = scans_api_inst.wait_for_scan_to_finish("SCAN", "test_scan", 5, 1)
 
-    assert result is True
+    # The new implementation returns a tuple (status_data, duration)
+    assert isinstance(result, tuple)
+    status_data, duration = result
+    assert status_data["status"] == "FINISHED"
+    assert status_data["percentage_done"] == "100%"
+    assert isinstance(duration, float)
     assert mock_get_status.call_count == 2
     mock_sleep.assert_called_once_with(1)
 
@@ -169,6 +176,7 @@ def test_wait_for_scan_to_finish_success(mock_print, mock_sleep, mock_get_status
 @patch("builtins.print")
 def test_wait_for_scan_to_finish_timeout(mock_print, mock_sleep, mock_get_status, scans_api_inst):
     """Test scan waiting timeout."""
+    from api.helpers.exceptions import ProcessTimeoutError
     # Mock scan always running - is_finished=False means not finished
     mock_get_status.return_value = {
         "is_finished": False,
@@ -176,10 +184,10 @@ def test_wait_for_scan_to_finish_timeout(mock_print, mock_sleep, mock_get_status
         "status": "RUNNING",
     }
 
-    with pytest.raises(builtins.Exception) as exc_info:
+    with pytest.raises(ProcessTimeoutError) as exc_info:
         scans_api_inst.wait_for_scan_to_finish("SCAN", "test_scan", 2, 1)
 
-    assert "scan timeout" in str(exc_info.value)
+    assert "Timeout waiting for" in str(exc_info.value)
     assert mock_get_status.call_count == 2
 
 
@@ -221,12 +229,14 @@ def test_extract_archives_success(mock_send, scans_api_inst):
 @patch.object(ScansAPI, "_send_request")
 def test_extract_archives_failure(mock_send, scans_api_inst):
     """Test archive extraction failure."""
+    from api.helpers.exceptions import ApiError
     mock_send.return_value = {"status": "0", "error": "Cannot extract"}
 
-    with pytest.raises(builtins.Exception) as exc_info:
+    with pytest.raises(ApiError) as exc_info:
         scans_api_inst.extract_archives("test_scan", True, False)
 
-    assert "Call extract_archives returned error" in str(exc_info.value)
+    assert "Failed to extract archives" in str(exc_info.value)
+    assert "Cannot extract" in str(exc_info.value)
 
 
 # --- Test remove_uploaded_content ---
