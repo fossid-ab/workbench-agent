@@ -5,4 +5,4 @@
 Dockerfile
 LICENSE
 README.md
-setup.cfg
+tests/
