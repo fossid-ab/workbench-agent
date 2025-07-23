@@ -1,14 +1,11 @@
 import logging
 from typing import Dict, Any
 from .helpers.api_base import APIBase
-from .helpers.exceptions import (
-    ApiError,
-    ScanNotFoundError,
-    ScanExistsError
-)
+from .helpers.exceptions import ApiError, ScanNotFoundError, ScanExistsError
 from .helpers.project_scan_checks import check_if_scan_exists
 
 logger = logging.getLogger("workbench-agent")
+
 
 class ScansAPI(APIBase):
     """
@@ -35,7 +32,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Creating webapp scan '{scan_code}' in project '{project_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "create",
@@ -47,7 +44,7 @@ class ScansAPI(APIBase):
                 "description": "Scan created using the Workbench Agent.",
             },
         }
-        
+
         try:
             response = self._send_request(payload)
             if response.get("status") == "1" and "data" in response:
@@ -58,7 +55,9 @@ class ScansAPI(APIBase):
                 return int(scan_id)
             else:
                 error_msg = response.get("error", f"Unexpected response: {response}")
-                raise ApiError(f"Failed to create scan '{scan_code}': {error_msg}", details=response)
+                raise ApiError(
+                    f"Failed to create scan '{scan_code}': {error_msg}", details=response
+                )
         except ScanExistsError:
             raise  # Re-raise specific errors
         except Exception as e:
@@ -80,10 +79,10 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Starting dependency analysis for scan '{scan_code}'")
-        
+
         # Check if dependency analysis can start
         self.assert_dependency_analysis_can_start(scan_code)
-        
+
         payload = {
             "group": "scans",
             "action": "run_dependency_analysis",
@@ -91,14 +90,17 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") != "1":
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to start dependency analysis for scan '{scan_code}': {error_msg}", details=response)
-        
+            raise ApiError(
+                f"Failed to start dependency analysis for scan '{scan_code}': {error_msg}",
+                details=response,
+            )
+
         logger.info(f"Dependency analysis started for scan '{scan_code}'")
 
     def get_pending_files(self, scan_code: str) -> Dict[str, str]:
@@ -116,7 +118,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting pending files for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "get_pending_files",
@@ -124,7 +126,7 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             data = response["data"]
@@ -155,7 +157,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting policy warnings counter for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "get_policy_warnings_counter",
@@ -163,7 +165,7 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -171,7 +173,10 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to get policy warnings counter for scan '{scan_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to get policy warnings counter for scan '{scan_code}': {error_msg}",
+                details=response,
+            )
 
     def get_scan_identified_components(self, scan_code: str) -> Dict[str, Any]:
         """
@@ -189,7 +194,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting identified components for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "get_scan_identified_components",
@@ -197,7 +202,7 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -205,7 +210,10 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to get identified components for scan '{scan_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to get identified components for scan '{scan_code}': {error_msg}",
+                details=response,
+            )
 
     def get_scan_identified_licenses(self, scan_code: str) -> Dict[str, Any]:
         """
@@ -223,7 +231,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting identified licenses for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "get_scan_identified_licenses",
@@ -232,7 +240,7 @@ class ScansAPI(APIBase):
                 "unique": "1",
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -240,7 +248,10 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to get identified licenses for scan '{scan_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to get identified licenses for scan '{scan_code}': {error_msg}",
+                details=response,
+            )
 
     def get_results(self, scan_code: str) -> Dict[str, Any]:
         """
@@ -258,7 +269,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting scan results for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "get_results",
@@ -267,7 +278,7 @@ class ScansAPI(APIBase):
                 "unique": "1",
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -275,7 +286,9 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to get scan results for scan '{scan_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to get scan results for scan '{scan_code}': {error_msg}", details=response
+            )
 
     def get_dependency_analysis_result(self, scan_code: str) -> Dict[str, Any]:
         """
@@ -293,7 +306,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting dependency analysis results for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "get_dependency_analysis_results",
@@ -301,7 +314,7 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -309,7 +322,10 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to get dependency analysis results for scan '{scan_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to get dependency analysis results for scan '{scan_code}': {error_msg}",
+                details=response,
+            )
 
     def extract_archives(
         self,
@@ -334,7 +350,7 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Extracting archives for scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "extract_archives",
@@ -344,14 +360,16 @@ class ScansAPI(APIBase):
                 "jar_file_extraction": jar_file_extraction,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") != "1":
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to extract archives for scan '{scan_code}': {error_msg}", details=response)
-        
+            raise ApiError(
+                f"Failed to extract archives for scan '{scan_code}': {error_msg}", details=response
+            )
+
         logger.info(f"Archive extraction completed for scan '{scan_code}'")
         return True
 
@@ -411,7 +429,7 @@ class ScansAPI(APIBase):
 
         self.assert_scan_can_start(scan_code)
         logger.info(f"Starting scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "run",
@@ -419,17 +437,21 @@ class ScansAPI(APIBase):
                 "scan_code": scan_code,
                 "limit": limit,
                 "sensitivity": sensitivity,
-                "auto_identification_detect_declaration": int(auto_identification_detect_declaration),
+                "auto_identification_detect_declaration": int(
+                    auto_identification_detect_declaration
+                ),
                 "auto_identification_detect_copyright": int(auto_identification_detect_copyright),
-                "auto_identification_resolve_pending_ids": int(auto_identification_resolve_pending_ids),
+                "auto_identification_resolve_pending_ids": int(
+                    auto_identification_resolve_pending_ids
+                ),
                 "delta_only": int(delta_only),
                 "advanced_match_scoring": int(advanced_match_scoring),
             },
         }
-        
+
         if match_filtering_threshold > -1:
             payload["data"]["match_filtering_threshold"] = match_filtering_threshold
-            
+
         if reuse_identification:
             data = payload["data"]
             data["reuse_identification"] = "1"
@@ -445,14 +467,14 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             logger.error(f"Failed to start scan '{scan_code}': {error_msg} payload {payload}")
             raise ApiError(f"Failed to start scan '{scan_code}': {error_msg}", details=response)
-        
+
         logger.info(f"Scan '{scan_code}' started successfully")
         return response
 
     def check_status(self, scan_type: str, scan_code: str) -> Dict[str, Any]:
         """
         Calls API scans -> check_status to determine if the process is finished.
-        
+
         Args:
             scan_type: One of these: SCAN, DEPENDENCY_ANALYSIS
             scan_code: The unique identifier for the scan
@@ -465,7 +487,7 @@ class ScansAPI(APIBase):
             ScanNotFoundError: If the scan doesn't exist
         """
         logger.debug(f"Checking status for {scan_type} on scan '{scan_code}'")
-        
+
         payload = {
             "group": "scans",
             "action": "check_status",
@@ -474,7 +496,7 @@ class ScansAPI(APIBase):
                 "type": scan_type,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -482,7 +504,10 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Scan not found" in error_msg or "row_not_found" in error_msg:
                 raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(f"Failed to check status for {scan_type} on scan '{scan_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to check status for {scan_type} on scan '{scan_code}': {error_msg}",
+                details=response,
+            )
 
     def remove_uploaded_content(self, filename: str, scan_code: str):
         """
@@ -494,8 +519,10 @@ class ScansAPI(APIBase):
             scan_code: The unique identifier for the scan
         """
         logger.debug(f"Removing uploaded content '{filename}' from scan '{scan_code}'")
-        print(f"Called scans->remove_uploaded_content on file {filename}")  # Match original behavior
-        
+        print(
+            f"Called scans->remove_uploaded_content on file {filename}"
+        )  # Match original behavior
+
         payload = {
             "group": "scans",
             "action": "remove_uploaded_content",
@@ -504,11 +531,13 @@ class ScansAPI(APIBase):
                 "filename": filename,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") != "1":
             warning_msg = f"Cannot delete file {filename}, maybe is the first time when uploading this file? API response {response}."
             print(warning_msg)  # Match original behavior
-            logger.warning(f"Cannot delete file '{filename}' from scan '{scan_code}', maybe is the first time uploading? API response: {response}")
+            logger.warning(
+                f"Cannot delete file '{filename}' from scan '{scan_code}', maybe is the first time uploading? API response: {response}"
+            )
         else:
             logger.debug(f"Successfully removed '{filename}' from scan '{scan_code}'")

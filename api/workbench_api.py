@@ -9,13 +9,13 @@ logger = logging.getLogger("workbench-agent")
 class WorkbenchAPI(ProjectsAPI, ScansAPI, UploadAPI):
     """
     A comprehensive client for interacting with the FossID Workbench API.
-    
+
     This class composes all individual API components into a single unified client,
     providing access to all Workbench functionality including:
     - Project and Scan management
     - Scan operations
     - File uploads
-    
+
     The client follows modern Python practices with:
     - Comprehensive error handling with specific exception types
     - Structured logging throughout all operations

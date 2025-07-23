@@ -1,11 +1,7 @@
 import logging
 from typing import Dict, Any
 from .helpers.api_base import APIBase
-from .helpers.exceptions import (
-    ApiError,
-    ProjectNotFoundError,
-    ProjectExistsError
-    )
+from .helpers.exceptions import ApiError, ProjectNotFoundError, ProjectExistsError
 from .helpers.project_scan_checks import check_if_project_exists
 
 logger = logging.getLogger("workbench-agent")
@@ -41,7 +37,7 @@ class ProjectsAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Creating project '{project_code}'")
-        
+
         payload = {
             "group": "projects",
             "action": "create",
@@ -51,7 +47,7 @@ class ProjectsAPI(APIBase):
                 "description": "Automatically created by Workbench Agent script",
             },
         }
-        
+
         try:
             response = self._send_request(payload)
             if response.get("status") == "1":
@@ -59,13 +55,17 @@ class ProjectsAPI(APIBase):
                 print(f"Created project {project_code}")  # Match original behavior for tests
             else:
                 error_msg = response.get("error", f"Unexpected response: {response}")
-                raise ApiError(f"Failed to create project '{project_code}': {error_msg}", details=response)
+                raise ApiError(
+                    f"Failed to create project '{project_code}': {error_msg}", details=response
+                )
         except ProjectExistsError:
             raise  # Re-raise specific errors
         except Exception as e:
             if isinstance(e, (ApiError, ProjectExistsError)):
                 raise
-            raise ApiError(f"Failed to create project '{project_code}': {e}", details={"error": str(e)})
+            raise ApiError(
+                f"Failed to create project '{project_code}': {e}", details={"error": str(e)}
+            )
 
     def projects_get_policy_warnings_info(self, project_code: str) -> Dict[str, Any]:
         """
@@ -83,7 +83,7 @@ class ProjectsAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Getting policy warnings info for project '{project_code}'")
-        
+
         payload = {
             "group": "projects",
             "action": "get_policy_warnings_info",
@@ -91,7 +91,7 @@ class ProjectsAPI(APIBase):
                 "project_code": project_code,
             },
         }
-        
+
         response = self._send_request(payload)
         if response.get("status") == "1" and "data" in response:
             return response["data"]
@@ -99,4 +99,7 @@ class ProjectsAPI(APIBase):
             error_msg = response.get("error", "Unknown error")
             if "Project does not exist" in error_msg or "row_not_found" in error_msg:
                 raise ProjectNotFoundError(f"Project '{project_code}' not found")
-            raise ApiError(f"Failed to get policy warnings info for project '{project_code}': {error_msg}", details=response)
+            raise ApiError(
+                f"Failed to get policy warnings info for project '{project_code}': {error_msg}",
+                details=response,
+            )

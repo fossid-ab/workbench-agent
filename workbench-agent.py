@@ -59,14 +59,7 @@ class CliWrapper:
         try:
             result = subprocess.check_output(args, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            return (
-                "Calledprocerr: "
-                + str(e.cmd)
-                + " "
-                + str(e.returncode)
-                + " "
-                + str(e.output)
-            )
+            return "Calledprocerr: " + str(e.cmd) + " " + str(e.returncode) + " " + str(e.output)
         # pylint: disable-next=broad-except
         except Exception as e:
             return "Error: " + str(e)
@@ -101,14 +94,7 @@ class CliWrapper:
                 subprocess.check_output(my_cmd, shell=True, stderr=outfile)
             # result = subprocess.check_output(args, stderr=subprocess.STDOUT)
         except subprocess.CalledProcessError as e:
-            print(
-                "Calledprocerr: "
-                + str(e.cmd)
-                + " "
-                + str(e.returncode)
-                + " "
-                + str(e.output)
-            )
+            print("Calledprocerr: " + str(e.cmd) + " " + str(e.returncode) + " " + str(e.output))
             print(traceback.format_exc())
             sys.exit()
         # pylint: disable-next=broad-except
@@ -290,29 +276,29 @@ def parse_cmdline_args():
         required=False,
     )
     optional.add_argument(
-        '--no_advanced_match_scoring',
-        help='Disable advanced match scoring which by default is enabled.',
-        dest='advanced_match_scoring',
-        action='store_false',
+        "--no_advanced_match_scoring",
+        help="Disable advanced match scoring which by default is enabled.",
+        dest="advanced_match_scoring",
+        action="store_false",
     )
     optional.add_argument(
         "--match_filtering_threshold",
         help="Minimum length, in characters, of the snippet to be considered valid after applying match filtering.\n"
-            "Set to 0 to disable intelligent match filtering for current scan.",
+        "Set to 0 to disable intelligent match filtering for current scan.",
         type=int,
         default=-1,
     )
     optional.add_argument(
         "--target_path",
         help="The path on the Workbench server where the code to be scanned is stored.\n"
-             "No upload is done in this scenario.",
+        "No upload is done in this scenario.",
         type=str,
         required=False,
     )
     optional.add_argument(
         "--chunked_upload",
         help="For files bigger than 8 MB (which is default post_max_size in php.ini) uploading will be done using\n"
-             "the header Transfer-encoding: chunked with chunks of 5MB.",
+        "the header Transfer-encoding: chunked with chunks of 5MB.",
         action="store_true",
         default=False,
         required=False,
@@ -478,9 +464,7 @@ def main():
         # Run scan and save .fossid file as temporary file
         blind_scan_result_path = cli_wrapper.blind_scan(params.path, params.run_dependency_analysis)
         print(
-            "Temporary file containing hashes generated at path: {}".format(
-                blind_scan_result_path
-            )
+            "Temporary file containing hashes generated at path: {}".format(blind_scan_result_path)
         )
 
     # Create Project if it doesn't exist
@@ -490,14 +474,10 @@ def main():
     # Create scan if it doesn't exist
     scan_exists = workbench.check_if_scan_exists(params.scan_code)
     if not scan_exists:
-        print(
-            f"Scan with code {params.scan_code} does not exist. Calling API to create it..."
-        )
+        print(f"Scan with code {params.scan_code} does not exist. Calling API to create it...")
         workbench.create_webapp_scan(params.scan_code, params.project_code, params.target_path)
     else:
-        print(
-            f"Scan with code {params.scan_code} already exists. Proceeding to upload..."
-        )
+        print(f"Scan with code {params.scan_code} already exists. Proceeding to upload...")
     # Handle blind scan differently from regular scan
     if params.blind_scan:
         # Upload temporary file with blind scan hashes
@@ -508,19 +488,13 @@ def main():
         if os.path.isfile(blind_scan_result_path):
             os.remove(blind_scan_result_path)
         else:
-            print(
-                "Can not delete the file {} as it doesn't exists".format(
-                    blind_scan_result_path
-                )
-            )
+            print("Can not delete the file {} as it doesn't exists".format(blind_scan_result_path))
     # Handle normal scanning (directly uploading files at given path instead of generating hashes with CLI)
     # There is no file upload when scanning from target path
     elif not params.target_path:
         if not os.path.isdir(params.path):
             # The given path is an actual file path. Only this file will be uploaded
-            print(
-                "Uploading file indicated in --path parameter: {}".format(params.path)
-            )
+            print("Uploading file indicated in --path parameter: {}".format(params.path))
             workbench.upload_files(params.scan_code, params.path, params.chunked_upload)
         else:
             # Get all files found at given path (including in subdirectories). Exclude directories
@@ -571,8 +545,8 @@ def main():
             params.identification_reuse_type,
             params.specific_code,
             params.advanced_match_scoring,
-            params.match_filtering_threshold
-         )
+            params.match_filtering_threshold,
+        )
         # Check if finished based on: scan_number_of_tries X scan_wait_time until throwing an error
         workbench.wait_for_scan_to_finish(
             "SCAN", params.scan_code, params.scan_number_of_tries, params.scan_wait_time
@@ -595,9 +569,7 @@ def main():
     # scans -> get_scan_identified_components
     if params.get_scan_identified_components:
         print("Identified components: ")
-        identified_components = workbench.get_scan_identified_components(
-            params.scan_code
-        )
+        identified_components = workbench.get_scan_identified_components(params.scan_code)
         print(json.dumps(identified_components))
         save_results(params=params, results=identified_components)
         sys.exit(0)
@@ -645,4 +617,4 @@ def main():
         save_results(params=params, results=identified_licenses)
 
 
-main() 
+main()

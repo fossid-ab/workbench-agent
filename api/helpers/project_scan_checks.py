@@ -16,9 +16,9 @@ def check_if_project_exists(send_request_func: Callable, project_code: str) -> b
         bool: True if project exists, False otherwise
     """
     from .exceptions import ProjectNotFoundError
-    
+
     logger.debug(f"Checking if project '{project_code}' exists")
-    
+
     payload = {
         "group": "projects",
         "action": "get_information",
@@ -26,7 +26,7 @@ def check_if_project_exists(send_request_func: Callable, project_code: str) -> b
             "project_code": project_code,
         },
     }
-    
+
     try:
         response = send_request_func(payload)
         # If we get a successful response, the project exists
@@ -34,7 +34,9 @@ def check_if_project_exists(send_request_func: Callable, project_code: str) -> b
             logger.debug(f"Project '{project_code}' exists")
             return True
         else:
-            logger.debug(f"Project '{project_code}' does not exist (status: {response.get('status')})")
+            logger.debug(
+                f"Project '{project_code}' does not exist (status: {response.get('status')})"
+            )
             return False
     except ProjectNotFoundError:
         # This is expected when project doesn't exist
@@ -58,9 +60,9 @@ def check_if_scan_exists(send_request_func: Callable, scan_code: str) -> bool:
         bool: True if scan exists, False otherwise
     """
     from .exceptions import ScanNotFoundError
-    
+
     logger.debug(f"Checking if scan '{scan_code}' exists")
-    
+
     payload = {
         "group": "scans",
         "action": "get_information",
@@ -68,7 +70,7 @@ def check_if_scan_exists(send_request_func: Callable, scan_code: str) -> bool:
             "scan_code": scan_code,
         },
     }
-    
+
     try:
         response = send_request_func(payload)
         # If we get a successful response, the scan exists
