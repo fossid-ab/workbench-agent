@@ -1,0 +1,4 @@
+# Testing requirements for workbench-agent
+pytest>=7.0.0
+pytest-mock>=3.6.1
+requests>=2.25.1 

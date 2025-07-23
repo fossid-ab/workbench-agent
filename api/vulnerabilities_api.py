@@ -27,12 +27,19 @@ class VulnerabilitiesAPI(APIBase):
         count_response = self._send_request(count_payload)
 
         if count_response.get("status") != "1":
-            error_msg = count_response.get("error", f"Unexpected response format or status: {count_response}")
-            raise builtins.Exception(f"Failed to get vulnerability count for scan '{scan_code}': {error_msg}")
+            error_msg = count_response.get(
+                "error", f"Unexpected response format or status: {count_response}"
+            )
+            raise builtins.Exception(
+                f"Failed to get vulnerability count for scan '{scan_code}': {error_msg}"
+            )
 
         # Get the total count from the response
         total_count = 0
-        if isinstance(count_response.get("data"), dict) and "count_results" in count_response["data"]:
+        if (
+            isinstance(count_response.get("data"), dict)
+            and "count_results" in count_response["data"]
+        ):
             total_count = int(count_response["data"]["count_results"])
 
         if total_count == 0:
@@ -58,7 +65,9 @@ class VulnerabilitiesAPI(APIBase):
 
             if response.get("status") != "1":
                 error_msg = response.get("error", f"Unexpected response: {response}")
-                raise builtins.Exception(f"Failed to fetch vulnerabilities for scan '{scan_code}': {error_msg}")
+                raise builtins.Exception(
+                    f"Failed to fetch vulnerabilities for scan '{scan_code}': {error_msg}"
+                )
 
             # Extract vulnerabilities from response
             if "data" in response and isinstance(response["data"], list):
@@ -73,4 +82,4 @@ class VulnerabilitiesAPI(APIBase):
             offset += page_size
 
         print(f"Retrieved {len(vulnerabilities)} vulnerabilities for scan '{scan_code}'.")
-        return vulnerabilities 
+        return vulnerabilities

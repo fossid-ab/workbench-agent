@@ -25,4 +25,4 @@ class WorkbenchAPI(ProjectsAPI, ScansAPI, UploadAPI, VulnerabilitiesAPI, Downloa
             api_user (str): The username used for API authentication.
             api_token (str): The API token for authentication.
         """
-        super().__init__(api_url, api_user, api_token) 
+        super().__init__(api_url, api_user, api_token)

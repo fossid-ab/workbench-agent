@@ -37,7 +37,7 @@ class UploadAPI(APIBase):
         """
         try:
             req = requests.Request(
-                'POST',
+                "POST",
                 self.api_url,
                 headers=headers,
                 data=chunk,
@@ -46,8 +46,8 @@ class UploadAPI(APIBase):
             s = requests.Session()
             prepped = s.prepare_request(req)
             # Remove the unwanted header  'Content-Length' !!!
-            if 'Content-Length' in prepped.headers:
-                del prepped.headers['Content-Length']
+            if "Content-Length" in prepped.headers:
+                del prepped.headers["Content-Length"]
 
             # Send HTTP request and retrieve response
             response = s.send(prepped)
@@ -89,14 +89,18 @@ class UploadAPI(APIBase):
             chunked_upload (bool): Enable/disable chunk upload.
         """
         file_size = os.path.getsize(path)
-        size_limit = 8 * 1024 * 1024  # 8MB in bytes. Based on the default value of post_max_size in php.ini
+        size_limit = (
+            8 * 1024 * 1024
+        )  # 8MB in bytes. Based on the default value of post_max_size in php.ini
         # Prepare parameters
         filename = os.path.basename(path)
         filename_base64 = base64.b64encode(filename.encode()).decode("utf-8")
         scan_code_base64 = base64.b64encode(scan_code.encode()).decode("utf-8")
 
         if chunked_upload and (file_size > size_limit):
-            print(f"Uploading {filename} using 'Transfer-encoding: chunks' due to file size {file_size}.")
+            print(
+                f"Uploading {filename} using 'Transfer-encoding: chunks' due to file size {file_size}."
+            )
             # Use chunked upload for files bigger than size_limit
             # First delete possible existing files because chunk uploading works by appending existing file on disk.
             self.remove_uploaded_content(filename, scan_code)
@@ -104,8 +108,8 @@ class UploadAPI(APIBase):
             headers = {
                 "FOSSID-SCAN-CODE": scan_code_base64,
                 "FOSSID-FILE-NAME": filename_base64,
-                'Transfer-Encoding': 'chunked',
-                'Content-Type': 'application/octet-stream'
+                "Transfer-Encoding": "chunked",
+                "Content-Type": "application/octet-stream",
             }
             try:
                 with open(path, "rb") as file:
@@ -120,10 +124,7 @@ class UploadAPI(APIBase):
             print("Finished uploading.")
         else:
             # Regular upload, no chunk upload
-            headers = {
-                "FOSSID-SCAN-CODE": scan_code_base64,
-                "FOSSID-FILE-NAME": filename_base64
-            }
+            headers = {"FOSSID-SCAN-CODE": scan_code_base64, "FOSSID-FILE-NAME": filename_base64}
             print("Uploading...")
             try:
                 with open(path, "rb") as file:
@@ -159,4 +160,4 @@ class UploadAPI(APIBase):
                 print(f"Failed to upload files to the scan {scan_code}.")
                 print(traceback.print_exc())
                 sys.exit(1)
-            print("Finished uploading.") 
+            print("Finished uploading.")

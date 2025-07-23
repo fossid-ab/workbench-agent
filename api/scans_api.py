@@ -29,7 +29,9 @@ class ScansAPI(APIBase):
         }
         return self._send_request(payload)
 
-    def create_webapp_scan(self, scan_code: str, project_code: str = None, target_path: str = None) -> bool:
+    def create_webapp_scan(
+        self, scan_code: str, project_code: str = None, target_path: str = None
+    ) -> bool:
         """
         Creates a Scan in Workbench. The scan can optionally be created inside a Project.
 
@@ -54,9 +56,7 @@ class ScansAPI(APIBase):
         }
         response = self._send_request(payload)
         if response["status"] != "1":
-            raise builtins.Exception(
-                "Failed to create scan {}: {}".format(scan_code, response)
-            )
+            raise builtins.Exception("Failed to create scan {}: {}".format(scan_code, response))
         if "error" in response.keys():
             raise builtins.Exception(
                 "Failed to create scan {}: {}".format(scan_code, response["error"])
@@ -379,9 +379,7 @@ class ScansAPI(APIBase):
         #     public const FAILED = 'FAILED';
         if scan_status["status"] not in ["NEW", "FINISHED", "FAILED"]:
             raise builtins.Exception(
-                "Cannot start scan. Current status of the scan is {}.".format(
-                    scan_status["status"]
-                )
+                "Cannot start scan. Current status of the scan is {}.".format(scan_status["status"])
             )
 
     def assert_dependency_analysis_can_start(self, scan_code: str):
@@ -434,9 +432,7 @@ class ScansAPI(APIBase):
         }
         response = self._send_request(payload)
         if response["status"] == "0":
-            raise builtins.Exception(
-                "Call extract_archives returned error: {}".format(response)
-            )
+            raise builtins.Exception("Call extract_archives returned error: {}".format(response))
         return True
 
     def check_if_scan_exists(self, scan_code: str):
@@ -475,7 +471,7 @@ class ScansAPI(APIBase):
         identification_reuse_type: str = None,
         specific_code: str = None,
         advanced_match_scoring: bool = True,
-        match_filtering_threshold: int = -1
+        match_filtering_threshold: int = -1,
     ):
         """
 
@@ -499,9 +495,7 @@ class ScansAPI(APIBase):
         scan_exists = self.check_if_scan_exists(scan_code)
         if not scan_exists:
             raise builtins.Exception(
-                "Scan with scan_code: {} doesn't exist when calling 'run' action!".format(
-                    scan_code
-                )
+                "Scan with scan_code: {} doesn't exist when calling 'run' action!".format(scan_code)
             )
 
         self._assert_scan_can_start(scan_code)
@@ -516,9 +510,7 @@ class ScansAPI(APIBase):
                 "auto_identification_detect_declaration": int(
                     auto_identification_detect_declaration
                 ),
-                "auto_identification_detect_copyright": int(
-                    auto_identification_detect_copyright
-                ),
+                "auto_identification_detect_copyright": int(auto_identification_detect_copyright),
                 "auto_identification_resolve_pending_ids": int(
                     auto_identification_resolve_pending_ids
                 ),
@@ -527,7 +519,7 @@ class ScansAPI(APIBase):
             },
         }
         if match_filtering_threshold > -1:
-            payload["data"]['match_filtering_threshold'] = match_filtering_threshold
+            payload["data"]["match_filtering_threshold"] = match_filtering_threshold
         if reuse_identification:
             data = payload["data"]
             data["reuse_identification"] = "1"
@@ -541,11 +533,10 @@ class ScansAPI(APIBase):
         response = self._send_request(payload)
         if response["status"] != "1":
             import logging
+
             logger = logging.getLogger("log")
             logger.error(
-                "Failed to start scan {}: {} payload {}".format(
-                    scan_code, response, payload
-                )
+                "Failed to start scan {}: {} payload {}".format(scan_code, response, payload)
             )
             raise builtins.Exception(
                 "Failed to start scan {}: {}".format(scan_code, response["error"])
@@ -574,4 +565,4 @@ class ScansAPI(APIBase):
         if resp["status"] != "1":
             print(
                 f"Cannot delete file {filename}, maybe is the first time when uploading this file? API response {resp}."
-            ) 
+            )

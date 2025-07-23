@@ -11,11 +11,11 @@ class APIBase:
     Base class with helper methods for Workbench API interactions.
     Contains methods that handle the "how" of API operations.
     """
-    
+
     def __init__(self, api_url: str, api_user: str, api_token: str):
         """
         Initialize the base Workbench API client with authentication details.
-        
+
         Args:
             api_url: URL to the API endpoint
             api_user: API username
@@ -40,22 +40,20 @@ class APIBase:
             "Accept": "*/*",
             "Content-Type": "application/json; charset=utf-8",
         }
-        
+
         # Add authentication to payload
         payload.setdefault("data", {})
         payload["data"]["username"] = self.api_user
         payload["data"]["key"] = self.api_token
-        
+
         req_body = json.dumps(payload)
         logger.debug("url %s", url)
         logger.debug("headers %s", headers)
         logger.debug(req_body)
-        
-        response = requests.request(
-            "POST", url, headers=headers, data=req_body, timeout=1800
-        )
+
+        response = requests.request("POST", url, headers=headers, data=req_body, timeout=1800)
         logger.debug(response.text)
-        
+
         try:
             # Attempt to parse the JSON
             parsed_json = json.loads(response.text)
@@ -67,4 +65,4 @@ class APIBase:
             print(f"At position: {e.pos}")
             print("Problematic JSON:")
             print(response.text)
-            raise 
+            raise
