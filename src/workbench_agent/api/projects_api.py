@@ -1,8 +1,7 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from .helpers.api_base import APIBase
-from ..exceptions import ApiError, ProjectNotFoundError, ProjectExistsError
-from .helpers.project_scan_checks import check_if_project_exists
+from ..exceptions import ApiError, ProjectNotFoundError, ProjectExistsError, ValidationError
 
 logger = logging.getLogger("workbench-agent")
 
@@ -11,19 +10,82 @@ class ProjectsAPI(APIBase):
     """
     Workbench API Project Operations.
     """
+    
+    # --- Enhanced Validation Methods ---
+    
+    def _validate_project_parameters(self, project_code: str) -> None:
+        """
+        Validates project parameters before API operations.
+        
+        Args:
+            project_code: The project code to validate
+            
+        Raises:
+            ValidationError: If parameters are invalid
+        """
+        if not project_code or not project_code.strip():
+            raise ValidationError("Project code cannot be empty")
+
+    # --- Project Information Methods ---
+    
+    def get_project_information(self, project_code: str) -> Dict[str, Any]:
+        """
+        Retrieves detailed information about a project.
+        
+        Args:
+            project_code: Code of the project to get information for
+            
+        Returns:
+            Dict containing project information
+            
+        Raises:
+            ProjectNotFoundError: If the project doesn't exist
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
+        logger.debug(f"Getting project information for '{project_code}'")
+
+        payload = {
+            "group": "projects",
+            "action": "get_information",
+            "data": {
+                "project_code": project_code,
+            },
+        }
+
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            return response["data"]
+        else:
+            error_msg = response.get("error", "Unknown error")
+            if "Project does not exist" in error_msg or "row_not_found" in error_msg:
+                raise ProjectNotFoundError(f"Project '{project_code}' not found")
+            raise ApiError(
+                f"Failed to get project information for '{project_code}': {error_msg}",
+                details=response,
+            )
 
     def check_if_project_exists(self, project_code: str) -> bool:
         """
-        Check if project exists.
-
+        Check if project exists (backwards compatibility with original agent).
+        
         Args:
             project_code: The unique identifier for the project
-
+            
         Returns:
             bool: True if project exists, False otherwise
         """
-        return check_if_project_exists(self._send_request, project_code)
+        try:
+            self.get_project_information(project_code)
+            return True
+        except ProjectNotFoundError:
+            return False
+        except (ApiError, Exception):
+            # On other errors, assume project doesn't exist for safety
+            return False
 
+    # --- Existing Methods with Enhanced Organization ---
+    
     def list_projects(self) -> List[Dict[str, Any]]:
         """
         List all projects accessible to the current user.
@@ -107,16 +169,21 @@ class ProjectsAPI(APIBase):
 
     def create_project(self, project_code: str):
         """
-        Create new project
+        Create new project.
+        Enhanced with better validation and error handling.
 
         Args:
             project_code: The unique identifier for the project
 
         Raises:
             ProjectExistsError: If a project with this code already exists
+            ValidationError: If parameters are invalid
             ApiError: If the API call fails
             NetworkError: If there are network issues
         """
+        # Enhanced validation
+        self._validate_project_parameters(project_code)
+        
         logger.debug(f"Creating project '{project_code}'")
 
         payload = {

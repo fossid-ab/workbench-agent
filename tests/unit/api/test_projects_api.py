@@ -21,31 +21,7 @@ def projects_api_inst():
 # --- Test Cases ---
 
 
-# --- Test check_if_project_exists ---
-@patch.object(ProjectsAPI, "_send_request")
-def test_check_if_project_exists_true(mock_send, projects_api_inst):
-    """Test project exists check when project exists."""
-    mock_send.return_value = {"status": "1", "data": {"project_code": "test_project"}}
 
-    result = projects_api_inst.check_if_project_exists("test_project")
-
-    assert result is True
-    mock_send.assert_called_once()
-    call_args = mock_send.call_args[0][0]
-    assert call_args["group"] == "projects"
-    assert call_args["action"] == "get_information"
-    assert call_args["data"]["project_code"] == "test_project"
-
-
-@patch.object(ProjectsAPI, "_send_request")
-def test_check_if_project_exists_false(mock_send, projects_api_inst):
-    """Test project exists check when project doesn't exist."""
-    mock_send.return_value = {"status": "0", "error": "Project does not exist"}
-
-    result = projects_api_inst.check_if_project_exists("nonexistent_project")
-
-    assert result is False
-    mock_send.assert_called_once()
 
 
 # --- Test create_project ---

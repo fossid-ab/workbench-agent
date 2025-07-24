@@ -153,25 +153,23 @@ class ResolveWorkbenchProjectScan(ProjectsAPI, ScansAPI):
             # Legacy code-based approach
             logger.info(f"Using legacy code-based approach for project '{project_identifier}' and scan '{scan_identifier}'...")
             
-            # Check if project exists, create if needed
-            if not self.check_if_project_exists(project_identifier):
-                logger.info(f"Project '{project_identifier}' does not exist. Creating...")
+            # Try to create project (more efficient than check + create)
+            try:
                 self.create_project(project_identifier)
                 logger.info(f"Project '{project_identifier}' created successfully.")
-            else:
-                logger.info(f"Project '{project_identifier}' already exists.")
+            except (ProjectExistsError, ApiError, NetworkError) as e:
+                logger.info(f"Project '{project_identifier}' may already exist or creation failed: {e}")
+                # Continue processing - the project might already exist
 
-            # Create scan if it doesn't exist
-            scan_exists = self.check_if_scan_exists(scan_identifier)
-            if not scan_exists:
-                logger.info(f"Scan '{scan_identifier}' does not exist. Creating...")
+            # Try to create scan (more efficient than check + create)
+            try:
                 scan_id = self.create_webapp_scan(
                     scan_code=scan_identifier,
                     project_code=project_identifier
                 )
-                logger.info(f"Created scan with ID: {scan_id}")
-            else:
-                logger.info(f"Scan '{scan_identifier}' already exists.")
+                logger.info(f"Created scan '{scan_identifier}' with ID: {scan_id}")
+            except (ScanExistsError, ApiError, NetworkError) as e:
+                logger.info(f"Scan '{scan_identifier}' may already exist or creation failed: {e}")
                 # For existing scans, we don't need the scan_id for our workflows
                 scan_id = None
 

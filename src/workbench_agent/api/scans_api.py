@@ -1,16 +1,132 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from .helpers.api_base import APIBase
-from ..exceptions import ApiError, ScanNotFoundError, ScanExistsError
-from .helpers.project_scan_checks import check_if_scan_exists
+from .helpers.process_waiters import ProcessWaiters
+from .helpers.status_checkers import StatusCheckers
+from ..exceptions import ApiError, ScanNotFoundError, ScanExistsError, ValidationError
 
 logger = logging.getLogger("workbench-agent")
 
 
-class ScansAPI(APIBase):
+class ScansAPI(APIBase, ProcessWaiters, StatusCheckers):
     """
-    Workbench API Scans Operations.
+    API client for scan-related operations on the Workbench platform.
+    
+    This class provides methods for creating, managing, and monitoring scans,
+    including uploading files, running analyses, and retrieving results.
+    Inherits from ProcessWaiters and StatusCheckers mixins for status checking and waiting capabilities.
     """
+
+    # --- Enhanced Validation Methods ---
+    
+    def _validate_scan_parameters(self, scan_code: str, **kwargs) -> None:
+        """
+        Validates scan parameters before API operations.
+        
+        Args:
+            scan_code: The scan code to validate
+            **kwargs: Additional parameters to validate
+            
+        Raises:
+            ValidationError: If parameters are invalid
+        """
+        if not scan_code or not scan_code.strip():
+            raise ValidationError("Scan code cannot be empty")
+            
+        # Validate limit parameter
+        limit = kwargs.get('limit')
+        if limit is not None and (not isinstance(limit, int) or limit < 1):
+            raise ValidationError("Limit must be a positive integer")
+            
+        # Validate sensitivity parameter
+        sensitivity = kwargs.get('sensitivity')
+        if sensitivity is not None and (not isinstance(sensitivity, int) or sensitivity < 1):
+            raise ValidationError("Sensitivity must be a positive integer")
+            
+        # Validate match filtering threshold
+        threshold = kwargs.get('match_filtering_threshold')
+        if threshold is not None and not isinstance(threshold, int):
+            raise ValidationError("Match filtering threshold must be an integer")
+
+    def _validate_reuse_parameters(self, reuse_identification: bool, identification_reuse_type: str = None, specific_code: str = None) -> None:
+        """
+        Validates identification reuse parameters.
+        
+        Args:
+            reuse_identification: Whether identification reuse is enabled
+            identification_reuse_type: Type of reuse
+            specific_code: Specific code for reuse
+            
+        Raises:
+            ValidationError: If reuse parameters are invalid
+        """
+        if reuse_identification:
+            valid_reuse_types = {"any", "only_me", "specific_project", "specific_scan"}
+            if identification_reuse_type and identification_reuse_type not in valid_reuse_types:
+                raise ValidationError(f"Invalid identification_reuse_type. Must be one of: {valid_reuse_types}")
+                
+            if identification_reuse_type in {"specific_project", "specific_scan"} and not specific_code:
+                raise ValidationError(f"specific_code is required when using {identification_reuse_type}")
+
+    # --- Scan Information Methods ---
+    
+    def get_scan_information(self, scan_code: str) -> Dict[str, Any]:
+        """
+        Retrieves detailed information about a scan.
+        
+        Args:
+            scan_code: Code of the scan to get information for
+            
+        Returns:
+            Dict containing scan information
+            
+        Raises:
+            ScanNotFoundError: If the scan doesn't exist
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
+        logger.debug(f"Getting scan information for '{scan_code}'")
+
+        payload = {
+            "group": "scans",
+            "action": "get_information", 
+            "data": {
+                "scan_code": scan_code,
+            },
+        }
+
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            return response["data"]
+        else:
+            error_msg = response.get("error", "Unknown error")
+            if "row_not_found" in error_msg or "Scan not found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Failed to get scan information for '{scan_code}': {error_msg}",
+                details=response,
+            )
+
+    def check_if_scan_exists(self, scan_code: str) -> bool:
+        """
+        Check if scan exists (backwards compatibility with original agent).
+        
+        Args:
+            scan_code: The unique identifier for the scan
+            
+        Returns:
+            bool: True if scan exists, False otherwise
+        """
+        try:
+            self.get_scan_information(scan_code)
+            return True
+        except ScanNotFoundError:
+            return False
+        except (ApiError, Exception):
+            # On other errors, assume scan doesn't exist for safety
+            return False
+
+    # --- Existing Methods with Enhanced Organization ---
 
     def list_scans(self) -> List[Dict[str, Any]]:
         """
@@ -48,26 +164,31 @@ class ScansAPI(APIBase):
             error_msg = response.get("error", f"Unexpected response: {response}")
             raise ApiError(f"Failed to list scans: {error_msg}", details=response)
 
-
-
     def create_webapp_scan(
-        self, scan_code: str, project_code: str = None
+        self, scan_code: str, project_code: str = None, target_path: str = None
     ) -> int:
         """
         Creates a Scan in Workbench. The scan can optionally be created inside a Project.
+        Enhanced with better validation and error handling.
 
         Args:
             scan_code: The unique identifier for the scan
             project_code: The project code within which to create the scan
+            target_path: Optional target path where scan is stored (for server-side scanning)
 
         Returns:
             int: The scan ID of the created scan
 
         Raises:
             ScanExistsError: If a scan with this code already exists
+            ValidationError: If parameters are invalid
             ApiError: If the API call fails
             NetworkError: If there are network issues
         """
+        # Enhanced validation
+        if not scan_code or not scan_code.strip():
+            raise ValidationError("Scan code cannot be empty")
+            
         logger.debug(f"Creating webapp scan '{scan_code}' in project '{project_code}'")
 
         payload = {
@@ -80,6 +201,10 @@ class ScansAPI(APIBase):
                 "description": "Scan created using the Workbench Agent.",
             },
         }
+        
+        # Add target_path only if provided (backwards compatibility)
+        if target_path:
+            payload["data"]["target_path"] = target_path
 
         try:
             response = self._send_request(payload)
@@ -115,9 +240,6 @@ class ScansAPI(APIBase):
             NetworkError: If there are network issues
         """
         logger.debug(f"Starting dependency analysis for scan '{scan_code}'")
-
-        # Check if dependency analysis can start
-        self.assert_dependency_analysis_can_start(scan_code)
 
         payload = {
             "group": "scans",
@@ -409,17 +531,7 @@ class ScansAPI(APIBase):
         logger.info(f"Archive extraction completed for scan '{scan_code}'")
         return True
 
-    def check_if_scan_exists(self, scan_code: str) -> bool:
-        """
-        Check if scan exists.
 
-        Args:
-            scan_code: The unique identifier for the scan
-
-        Returns:
-            bool: True if scan exists, False otherwise
-        """
-        return check_if_scan_exists(self._send_request, scan_code)
 
     def run_scan(
         self,
@@ -438,6 +550,7 @@ class ScansAPI(APIBase):
     ):
         """
         Run a scan with the specified parameters.
+        Enhanced with parameter validation and better error handling.
 
         Args:
             scan_code: Unique scan identifier
@@ -455,15 +568,24 @@ class ScansAPI(APIBase):
 
         Raises:
             ScanNotFoundError: If the scan doesn't exist
+            ValidationError: If parameters are invalid
             ProcessError: If the scan cannot be started
             ApiError: If the API call fails
             NetworkError: If there are network issues
         """
-        scan_exists = self.check_if_scan_exists(scan_code)
-        if not scan_exists:
-            raise ScanNotFoundError(f"Scan '{scan_code}' doesn't exist")
-
-        self.assert_scan_can_start(scan_code)
+        # Enhanced parameter validation
+        self._validate_scan_parameters(
+            scan_code=scan_code,
+            limit=limit,
+            sensitivity=sensitivity,
+            match_filtering_threshold=match_filtering_threshold
+        )
+        self._validate_reuse_parameters(
+            reuse_identification=reuse_identification,
+            identification_reuse_type=identification_reuse_type,
+            specific_code=specific_code
+        )
+        
         logger.info(f"Starting scan '{scan_code}'")
 
         payload = {
@@ -507,43 +629,112 @@ class ScansAPI(APIBase):
         logger.info(f"Scan '{scan_code}' started successfully")
         return response
 
-    def check_status(self, scan_type: str, scan_code: str) -> Dict[str, Any]:
+    # --- Backwards Compatibility Methods ---
+    
+    def _get_scan_status(self, scan_type: str, scan_code: str) -> Dict[str, Any]:
         """
-        Calls API scans -> check_status to determine if the process is finished.
-
+        Calls API scans -> check_status (backwards compatibility with original agent).
+        
         Args:
             scan_type: One of these: SCAN, DEPENDENCY_ANALYSIS
             scan_code: The unique identifier for the scan
-
+            
         Returns:
             dict: The data section from the JSON response returned from API
-
+            
         Raises:
             ApiError: If the API call fails
             ScanNotFoundError: If the scan doesn't exist
         """
-        logger.debug(f"Checking status for {scan_type} on scan '{scan_code}'")
+        return self.check_status(scan_type, scan_code)
+
+
+
+    def _get_pending_files(self, scan_code: str) -> Dict[str, str]:
+        """
+        Call API scans -> get_pending_files (backwards compatibility with original agent).
+        
+        Args:
+            scan_code: The unique identifier for the scan
+            
+        Returns:
+            dict: Dictionary of pending files
+            
+        Raises:
+            Exception: If there are API issues (original agent behavior)
+        """
+        try:
+            return self.get_pending_files(scan_code)
+        except Exception as e:
+            # Match original agent behavior - raise Exception instead of specific errors
+            raise Exception(f"Error getting pending files result: {e}")
+
+    def _get_dependency_analysis_result(self, scan_code: str) -> Dict[str, Any]:
+        """
+        Retrieve dependency analysis results (backwards compatibility with original agent).
+        
+        Args:
+            scan_code: The unique identifier for the scan
+            
+        Returns:
+            dict: The dependency analysis results
+            
+        Raises:
+            Exception: If there are API issues (original agent behavior)
+        """
+        try:
+            return self.get_dependency_analysis_result(scan_code)
+        except Exception as e:
+            # Match original agent behavior - raise Exception instead of specific errors
+            raise Exception(f"Error getting dependency analysis result: {e}")
+
+    def _cancel_scan(self, scan_code: str) -> None:
+        """
+        Cancel a scan (backwards compatibility with original agent).
+        
+        Args:
+            scan_code: The unique identifier for the scan
+            
+        Raises:
+            Exception: If cancellation fails (original agent behavior)
+        """
+        logger.debug(f"Cancelling scan '{scan_code}'")
 
         payload = {
             "group": "scans",
-            "action": "check_status",
+            "action": "cancel_run",
             "data": {
                 "scan_code": scan_code,
-                "type": scan_type,
             },
         }
 
         response = self._send_request(payload)
-        if response.get("status") == "1" and "data" in response:
-            return response["data"]
-        else:
-            error_msg = response.get("error", "Unknown error")
-            if "Scan not found" in error_msg or "row_not_found" in error_msg:
-                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
-            raise ApiError(
-                f"Failed to check status for {scan_type} on scan '{scan_code}': {error_msg}",
-                details=response,
-            )
+        if response.get("status") != "1":
+            # Match original agent behavior - raise Exception with specific message
+            raise Exception(f"Error cancelling scan: {response}")
+
+        logger.info(f"Successfully cancelled scan '{scan_code}'")
+
+    def scans_get_policy_warnings_counter(self, scan_code: str) -> Dict[str, Any]:
+        """
+        Retrieve policy warnings information at scan level (backwards compatibility).
+        
+        Args:
+            scan_code: The unique identifier for the scan
+            
+        Returns:
+            dict: The policy warnings data
+            
+        Raises:
+            Exception: If there are API issues (original agent behavior)
+        """
+        try:
+            return self.get_policy_warnings_counter(scan_code)
+        except Exception as e:
+            # Match original agent behavior - raise Exception instead of specific errors
+            raise Exception(f"Error getting project policy warnings information result: {e}")
+
+
 
     def remove_uploaded_content(self, filename: str, scan_code: str):
         """

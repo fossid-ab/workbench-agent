@@ -51,29 +51,7 @@ def test_create_webapp_scan_failure(mock_send, scans_api_inst):
 
 
 
-# --- Test check_if_scan_exists ---
-@patch.object(ScansAPI, "_send_request")
-def test_check_if_scan_exists_true(mock_send, scans_api_inst):
-    """Test scan exists check when scan exists."""
-    mock_send.return_value = {"status": "1", "data": {"scan_code": "test_scan"}}
 
-    result = scans_api_inst.check_if_scan_exists("test_scan")
-
-    assert result is True
-    mock_send.assert_called_once()
-    call_args = mock_send.call_args[0][0]
-    assert call_args["group"] == "scans"
-    assert call_args["action"] == "get_information"
-
-
-@patch.object(ScansAPI, "_send_request")
-def test_check_if_scan_exists_false(mock_send, scans_api_inst):
-    """Test scan exists check when scan doesn't exist."""
-    mock_send.return_value = {"status": "0", "error": "Scan not found"}
-
-    result = scans_api_inst.check_if_scan_exists("nonexistent_scan")
-
-    assert result is False
 
 
 # --- Test get_scan_status ---

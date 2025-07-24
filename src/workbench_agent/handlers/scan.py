@@ -82,10 +82,19 @@ def handle_scan(workbench: WorkbenchAPI, params: argparse.Namespace) -> bool:
     
     # Enhanced upload process with clear feedback
     if params.path:
+        # Ensure scan is idle before uploading content
+        print("\nEnsuring the Scan is idle before uploading code...")
+        workbench.ensure_scan_is_idle(
+            scan_code, 
+            ["EXTRACT_ARCHIVES", "SCAN", "DEPENDENCY_ANALYSIS"],
+            getattr(params, 'scan_number_of_tries', 10),
+            getattr(params, 'scan_wait_time', 30)
+        )
+        
         print("\nClearing existing scan content...")
         try:
             # This method exists in the API
-            workbench.remove_uploaded_content("", params.scan_code)
+            workbench.remove_uploaded_content("", scan_code)  # Use resolved scan_code
             print("Successfully cleared existing scan content.")
         except Exception as e:
             logger.warning(f"Failed to clear existing scan content: {e}")
@@ -95,7 +104,7 @@ def handle_scan(workbench: WorkbenchAPI, params: argparse.Namespace) -> bool:
         print(f"\nUploading Code to Workbench...")
         upload_scan_content(
             workbench=workbench,
-            scan_code=params.scan_code,
+            scan_code=scan_code,  # Use resolved scan_code
             path=params.path,
             chunked_upload=getattr(params, 'chunked_upload', False)
         )
@@ -105,12 +114,21 @@ def handle_scan(workbench: WorkbenchAPI, params: argparse.Namespace) -> bool:
         extract_start_time = time.time()
         extract_archives(
             workbench=workbench,
-            scan_code=params.scan_code,
+            scan_code=scan_code,  # Use resolved scan_code
             recursive=getattr(params, 'recursively_extract_archives', False),
             jar_extraction=getattr(params, 'jar_file_extraction', False)
         )
         durations["extraction_duration"] = time.time() - extract_start_time
         print("Archive extraction completed.")
+        
+        # Verify scan can start after archive extraction
+        print("\nVerifying scan readiness after archive extraction...")
+        workbench.ensure_scan_is_idle(
+            scan_code, 
+            ["EXTRACT_ARCHIVES", "SCAN", "DEPENDENCY_ANALYSIS"],
+            getattr(params, 'scan_number_of_tries', 10),
+            getattr(params, 'scan_wait_time', 30)
+        )
     
     # Track completion states
     scan_completed = False
@@ -138,34 +156,34 @@ def handle_scan(workbench: WorkbenchAPI, params: argparse.Namespace) -> bool:
     # Handle dependency analysis only mode
     if not scan_operations["run_kb_scan"] and scan_operations["run_dependency_analysis"]:
         print("\nStarting Dependency Analysis only (skipping KB scan)...")
-        run_dependency_analysis(workbench, params.scan_code)
+        run_dependency_analysis(workbench, scan_code)  # Use resolved scan_code
         
         da_completed, durations["dependency_analysis"] = wait_for_dependency_analysis_completion_with_duration(
-            workbench, params.scan_code, timeout_minutes
+            workbench, scan_code, timeout_minutes  # Use resolved scan_code
         )
     
     # Run KB scan if requested
     elif scan_operations["run_kb_scan"]:
         print("\nStarting KB Scan Process...")
-        run_kb_scan(workbench, params.scan_code, scan_options)
+        run_kb_scan(workbench, scan_code, scan_options)  # Use resolved scan_code
         
         scan_completed, durations["kb_scan"] = wait_for_scan_completion_with_duration(
-            workbench, params.scan_code, timeout_minutes
+            workbench, scan_code, timeout_minutes  # Use resolved scan_code
         )
         
         # Run dependency analysis if requested
         if scan_completed and scan_operations["run_dependency_analysis"]:
             print("\nWaiting for Dependency Analysis to complete...")
-            run_dependency_analysis(workbench, params.scan_code)
+            run_dependency_analysis(workbench, scan_code)  # Use resolved scan_code
             da_completed, durations["dependency_analysis"] = wait_for_dependency_analysis_completion_with_duration(
-                workbench, params.scan_code, timeout_minutes
+                workbench, scan_code, timeout_minutes  # Use resolved scan_code
             )
     
     # Collect results with enhanced structure
-    results = collect_and_save_results_enhanced(workbench, params.scan_code, params)
+    results = collect_and_save_results_enhanced(workbench, scan_code, params)  # Use resolved scan_code
     
     # Print comprehensive operation summary
-    print_operation_summary(params, scan_completed, da_completed, project_code, params.scan_code, durations)
+    print_operation_summary(params, scan_completed, da_completed, project_code, scan_code, durations)  # Use resolved scan_code
     
     # Print Workbench links if available
     if scan_id:

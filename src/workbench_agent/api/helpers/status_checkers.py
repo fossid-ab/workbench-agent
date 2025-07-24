@@ -1,36 +1,40 @@
 import logging
-import requests
-from typing import Callable, Dict, Any, List
-from ...exceptions import ApiError, ProcessError, NetworkError, ValidationError, ProcessTimeoutError
+from typing import Dict, Any, List, TYPE_CHECKING
+
+from ...exceptions import (
+    ApiError,
+    NetworkError,
+    CompatibilityError,
+    ProcessError,
+    ProcessTimeoutError,
+    ScanNotFoundError,
+)
 
 logger = logging.getLogger("workbench-agent")
 
-
 class StatusCheckers:
     """
-    Mixin class that provides status checking functionality for various operations.
+    Mixin class for checking process statuses.
     This class should be mixed into APIBase to provide status checking capabilities.
     """
-
+    
     def _is_status_check_supported(self, scan_code: str, process_type: str) -> bool:
         """
-        Checks if the Workbench instance supports check_status for a given process type
+        Checks if the Workbench instance likely supports check_status for a given process type
         by probing the API and analyzing the response, including specific error codes.
 
         Args:
-            scan_code: The code of the scan to check against
-            process_type: The process type string (e.g., "EXTRACT_ARCHIVES")
+            scan_code: The code of the scan to check against.
+            process_type: The process type string (e.g., "EXTRACT_ARCHIVES").
 
         Returns:
-            True if the check_status call for the type seems supported, False otherwise
+            True if the check_status call for the type seems supported, False otherwise.
 
         Raises:
-            ApiError: If the check_status call fails for reasons other than a recognized unsupported type error
-            NetworkError: If there are network connectivity issues
+            ApiError: If the check_status call fails for reasons other than a recognized unsupported type error.
+            NetworkError: If there are network connectivity issues.
         """
-        logger.debug(
-            f"Probing check_status support for type '{process_type}' on scan '{scan_code}'..."
-        )
+        logger.debug(f"Probing check_status support for type '{process_type}' on scan '{scan_code}'...")
         payload = {
             "group": "scans",
             "action": "check_status",
@@ -40,34 +44,27 @@ class StatusCheckers:
             },
         }
         try:
-            # Short timeout is sufficient for the probe
+            # Short timeout is sufficient for the probe.
             response = self._send_request(payload, timeout=30)
 
-            # If status is "1", the API understood the request type
+            # If status is "1", the API understood the request type.
             if response.get("status") == "1":
-                logger.debug(
-                    f"check_status for type '{process_type}' appears to be supported (API status 1)."
-                )
+                logger.debug(f"check_status for type '{process_type}' appears to be supported (API status 1).")
                 return True
 
-            # Check for specific 'invalid type' error structure
+            # --- Check for specific 'invalid type' error structure ---
             elif response.get("status") == "0":
                 error_code = response.get("error")
                 data_list = response.get("data")
 
                 # Check for the specific error structure indicating an invalid 'type' option
-                if (
-                    error_code == "RequestData.Base.issues_while_parsing_request"
-                    and isinstance(data_list, list)
-                    and len(data_list) > 0
-                    and isinstance(data_list[0], dict)
-                    and data_list[0].get("code") == "RequestData.Base.field_not_valid_option"
-                    and data_list[0].get("message_parameters", {}).get("fieldname") == "type"
-                ):
+                if (error_code == "RequestData.Base.issues_while_parsing_request" and
+                    isinstance(data_list, list) and len(data_list) > 0 and
+                    isinstance(data_list[0], dict) and
+                    data_list[0].get("code") == "RequestData.Base.field_not_valid_option" and
+                    data_list[0].get("message_parameters", {}).get("fieldname") == "type"):
 
-                    logger.warning(
-                        f"This version of Workbench does not support check_status for '{process_type}'."
-                    )
+                    logger.warning(f"This version of Workbench does not support check_status for '{process_type}'. ")
 
                     # Optionally log the valid types listed by the API
                     valid_options = data_list[0].get("message_parameters", {}).get("options")
@@ -75,157 +72,47 @@ class StatusCheckers:
                         logger.debug(f"API reported valid types are: [{valid_options}]")
                     return False
                 else:
-                    # It's a different status 0 error (e.g., scan not found), raise it
-                    logger.error(
-                        f"API error during {process_type} support check (but not an invalid type error): {error_code} - {response.get('message')}"
-                    )
-                    raise ApiError(
-                        f"API error during {process_type} support check: {error_code} - {response.get('message', 'No details')}",
-                        details=response,
-                    )
+                    # It's a different status 0 error (e.g., scan not found), raise it.
+                    logger.error(f"API error during {process_type} support check (but not an invalid type error): {error_code} - {response.get('message')}")
+                    raise ApiError(f"API error during {process_type} support check: {error_code} - {response.get('message', 'No details')}", details=response)
 
             else:
                 # Unexpected response format (neither status 1 nor 0)
-                logger.warning(
-                    f"Unexpected response format during {process_type} support check: {response}"
-                )
+                logger.warning(f"Unexpected response format during {process_type} support check: {response}")
                 # Assume not supported to be safe
                 return False
 
-        except requests.exceptions.RequestException as e:
-            # Check for type validation errors in the exception message
+        except Exception as e:
+            # This block now primarily catches network errors or unexpected exceptions from _send_request.
+            # We add a fallback check on the exception message just in case _send_request's logic changes.
             error_msg_lower = str(e).lower()
-            if (
-                "requestdata.base.field_not_valid_option" in error_msg_lower
-                and "type" in error_msg_lower
-            ):
+            if "requestdata.base.field_not_valid_option" in error_msg_lower and "type" in error_msg_lower:
                 logger.warning(
                     f"Workbench likely does not support check_status for type '{process_type}'. "
                     f"Skipping status check. (Detected via exception: {e})"
                 )
                 return False
             else:
-                # Different error (network, scan not found, etc.), re-raise it
-                logger.error(
-                    f"Unexpected exception during {process_type} support check: {e}", exc_info=False
-                )
+                # Different error (network, scan not found, etc.), re-raise it.
+                logger.error(f"Unexpected exception during {process_type} support check: {e}", exc_info=False)
                 if isinstance(e, NetworkError):
                     raise
-                raise ApiError(
-                    f"Unexpected error during {process_type} support check",
-                    details={"error": str(e)},
-                ) from e
+                raise ApiError(f"Unexpected error during {process_type} support check", details={"error": str(e)}) from e
 
-    def assert_scan_can_start(self, scan_code: str):
-        """
-        Verify if a new scan can be initiated.
-
-        Args:
-            scan_code: The unique identifier for the scan
-
-        Raises:
-            ProcessError: If a scan cannot be started due to existing operations
-            ApiError: If there are API issues during status checking
-        """
-        logger.debug(f"Checking if scan '{scan_code}' can start...")
-
-        try:
-            status_data = self.check_status("SCAN", scan_code)
-            status = status_data.get("status", "UNKNOWN").upper()
-
-            # List of possible scan statuses taken from Workbench code:
-            # NEW, QUEUED, STARTING, RUNNING, FINISHED, FAILED
-            if status not in ["NEW", "FINISHED", "FAILED"]:
-                raise ProcessError(
-                    f"Cannot start scan '{scan_code}': scan is currently {status}. "
-                    f"Please wait for the current scan to complete or cancel it."
-                )
-
-            logger.debug(f"Scan '{scan_code}' can start (status: {status})")
-
-        except ProcessError:
-            raise
-        except Exception as e:
-            # If we can't get scan status, assume it's safe to start
-            logger.debug(
-                f"Could not check scan status for '{scan_code}': {e}. Assuming scan can start."
-            )
-
-    def assert_dependency_analysis_can_start(self, scan_code: str):
-        """
-        Verify if a new dependency analysis scan can be initiated.
-
-        Args:
-            scan_code: The unique identifier for the scan
-
-        Raises:
-            ProcessError: If dependency analysis cannot be started due to existing operations
-            ApiError: If there are API issues during status checking
-        """
-        logger.debug(f"Checking if dependency analysis for scan '{scan_code}' can start...")
-
-        try:
-            status_data = self.check_status("DEPENDENCY_ANALYSIS", scan_code)
-            status = status_data.get("status", "UNKNOWN").upper()
-
-            # List of possible scan statuses taken from Workbench code:
-            # NEW, QUEUED, STARTING, RUNNING, FINISHED, FAILED
-            if status not in ["NEW", "FINISHED", "FAILED"]:
-                raise ProcessError(
-                    f"Cannot start dependency analysis for scan '{scan_code}': "
-                    f"dependency analysis is currently {status}. "
-                    f"Please wait for the current analysis to complete or cancel it."
-                )
-
-            logger.debug(f"Dependency analysis for scan '{scan_code}' can start (status: {status})")
-
-        except ProcessError:
-            raise
-        except Exception as e:
-            # If we can't get dependency analysis status, assume it's safe to start
-            logger.debug(
-                f"Could not check dependency analysis status for '{scan_code}': {e}. Assuming analysis can start."
-            )
-
-    def get_scan_status(self, scan_type: str, scan_code: str) -> Dict[str, Any]:
-        """
-        Retrieves the status of a scan operation (SCAN or DEPENDENCY_ANALYSIS).
-
-        This is a public helper method that provides access to status checking with proper error handling.
-
-        Args:
-            scan_type: Type of scan operation (SCAN or DEPENDENCY_ANALYSIS)
-            scan_code: Code of the scan to check
-
-        Returns:
-            dict: The scan status data
-
-        Raises:
-            ApiError: If there are API issues
-            ValidationError: If scan_type is not supported
-        """
-        valid_scan_types = ["SCAN", "DEPENDENCY_ANALYSIS"]
-        if scan_type.upper() not in valid_scan_types:
-            raise ValidationError(
-                f"Invalid scan type '{scan_type}'. Must be one of: {valid_scan_types}"
-            )
-
-        return self.check_status(scan_type.upper(), scan_code)
-
-    def _standard_status_accessor(self, data: Dict[str, Any]) -> str:
+    def _standard_scan_status_accessor(self, data: Dict[str, Any]) -> str:
         """
         Standard status accessor for extracting status from API responses.
-        Works with responses from SCAN, DEPENDENCY_ANALYSIS and other operations.
-
+        Works with responses from SCAN, DEPENDENCY_ANALYSIS, EXTRACT_ARCHIVES and other operations.
+        
         This method handles various status formats and normalizes them:
         1. Checks if 'is_finished' flag indicates completion (returns "FINISHED")
         2. Falls back to the 'status' field if present
         3. Returns "UNKNOWN" if neither is available
         4. Handles errors gracefully by returning "ACCESS_ERROR"
-
+        
         Args:
             data: Response data dictionary from an API call
-
+            
         Returns:
             str: Normalized uppercase status string ("FINISHED", "RUNNING", "QUEUED", "FAILED", etc.)
         """
@@ -246,91 +133,149 @@ class StatusCheckers:
             return "UNKNOWN"
         except (ValueError, TypeError, AttributeError) as e:
             logger.warning(f"Error accessing status keys in data: {data}", exc_info=True)
-            return "ACCESS_ERROR"  # Use the ACCESS_ERROR state
+            return "ACCESS_ERROR" # Use the ACCESS_ERROR state
 
-    def ensure_scan_is_idle(
-        self, scan_code: str, params, operation_types: List[str], check_interval: int = 5
-    ):
+    def check_status(self, scan_type: str, scan_code: str) -> Dict[str, Any]:
         """
-        Ensure a scan is in an idle state before starting a new operation.
-        If any operation is running, waits for it to complete.
-
-        This is a status verification method that checks multiple operation types
-        and ensures they are all idle before proceeding.
+        Calls API scans -> check_status to determine if the process is finished.
 
         Args:
-            scan_code: The scan code to check
-            params: Parameters object with scan_number_of_tries and scan_wait_time
-            operation_types: List of operation types to check (e.g., ["SCAN", "DEPENDENCY_ANALYSIS"])
-            check_interval: Time to wait between checks in seconds
+            scan_type: One of these: SCAN, DEPENDENCY_ANALYSIS
+            scan_code: The unique identifier for the scan
+
+        Returns:
+            dict: The data section from the JSON response returned from API
 
         Raises:
-            ProcessTimeoutError: If scan doesn't become idle within the specified time
-            ProcessError: If there are process-related issues
-            ApiError: If there are API issues during status checking
+            ApiError: If the API call fails
+            ScanNotFoundError: If the scan doesn't exist
         """
-        logger.debug(f"Ensuring scan '{scan_code}' is idle for operations: {operation_types}")
+        logger.debug(f"Checking status for {scan_type} on scan '{scan_code}'")
 
+        payload = {
+            "group": "scans",
+            "action": "check_status",
+            "data": {
+                "scan_code": scan_code,
+                "type": scan_type,
+            },
+        }
+
+        response = self._send_request(payload)
+        if response.get("status") == "1" and "data" in response:
+            return response["data"]
+        else:
+            error_msg = response.get("error", "Unknown error")
+            if "Scan not found" in error_msg or "row_not_found" in error_msg:
+                raise ScanNotFoundError(f"Scan '{scan_code}' not found")
+            raise ApiError(
+                f"Failed to check status for {scan_type} on scan '{scan_code}': {error_msg}",
+                details=response,
+            )
+
+    def get_scan_status(self, scan_type: str, scan_code: str) -> dict:
+        """
+        Retrieve scan status.
+        
+        Args:
+            scan_type: Type of scan operation (SCAN, DEPENDENCY_ANALYSIS, or EXTRACT_ARCHIVES)
+            scan_code: Code of the scan to check
+            
+        Returns:
+            dict: The scan status data
+            
+        Raises:
+            ApiError: If there are API issues
+            ScanNotFoundError: If the scan doesn't exist
+            NetworkError: If there are network issues
+        """
+        return self.check_status(scan_type, scan_code)
+    
+    def ensure_scan_is_idle(
+        self,
+        scan_code: str,
+        process_types_to_check: List[str],
+        scan_number_of_tries: int = 10,
+        scan_wait_time: int = 30
+    ):
+        """
+        Ensures specified background processes for a scan are idle (not RUNNING or QUEUED).
+        If a process is running/queued, waits for it to finish before proceeding.
+        
+        This method can handle multiple process types at once and supports various process types 
+        including SCAN, DEPENDENCY_ANALYSIS, GIT_CLONE, EXTRACT_ARCHIVES, and REPORT_IMPORT.
+        
+        Args:
+            scan_code: Code of the scan to check
+            process_types_to_check: List of process types to check (e.g., ["SCAN", "DEPENDENCY_ANALYSIS"])
+            scan_number_of_tries: Maximum number of attempts for waiting
+            scan_wait_time: Time to wait between attempts
+        
+        Raises:
+            ProcessError: If there are process-related issues
+            ApiError: If there are API issues
+            NetworkError: If there are network issues
+        """
+        logger.debug(f"Asserting idle status for processes {process_types_to_check} on scan '{scan_code}'...")
         while True:
             all_processes_idle_this_pass = True
             logger.debug("Starting a new pass to check idle status...")
-
-            for operation_type in operation_types:
-                operation_type_upper = operation_type.upper()
-                logger.debug(f"Checking status for process type: {operation_type_upper}")
+            for process_type in process_types_to_check:
+                process_type_upper = process_type.upper()
+                logger.debug(f"Checking status for process type: {process_type_upper}")
                 current_status = "UNKNOWN"
-
                 try:
-                    if operation_type_upper in ["SCAN", "DEPENDENCY_ANALYSIS"]:
-                        status_data = self.check_status(operation_type_upper, scan_code)
-                        current_status = self._standard_status_accessor(status_data)
+                    if process_type_upper in ["SCAN", "DEPENDENCY_ANALYSIS", "REPORT_IMPORT"]:
+                        status_data = self.get_scan_status(process_type_upper, scan_code)
+                        current_status = status_data.get("status", "UNKNOWN").upper()
+                    elif process_type_upper == "EXTRACT_ARCHIVES":
+                        # EXTRACT_ARCHIVES status checking is handled differently
+                        # Check if status checking is supported for this process type
+                        if self._is_status_check_supported(scan_code, "EXTRACT_ARCHIVES"):
+                            # Use the specialized method for checking archive extraction status
+                            try:
+                                status_data = self.get_scan_status("EXTRACT_ARCHIVES", scan_code)
+                                current_status = self._standard_scan_status_accessor(status_data)
+                            except (ApiError, ScanNotFoundError) as e:
+                                logger.debug(f"Could not check EXTRACT_ARCHIVES status, assuming finished: {e}")
+                                current_status = "FINISHED"
+                        else:
+                            logger.debug(f"EXTRACT_ARCHIVES status checking not supported. Assuming idle.")
+                            current_status = "FINISHED"
                     else:
-                        logger.warning(
-                            f"Unknown process type '{operation_type_upper}' requested for idle check. Skipping."
-                        )
+                        logger.warning(f"Unknown process type '{process_type_upper}' requested for idle check. Skipping.")
                         continue
-
-                    logger.debug(f"Current status for {operation_type_upper}: {current_status}")
-
-                except Exception as e:
-                    logger.debug(
-                        f"Could not check {operation_type_upper} status for scan '{scan_code}': {e}. Assuming idle."
-                    )
-                    print(f"  - {operation_type_upper}: Not found (considered idle).")
+                    logger.debug(f"Current status for {process_type_upper}: {current_status}")
+                except ScanNotFoundError:
+                    logger.debug(f"Scan '{scan_code}' not found during idle check for {process_type_upper}. Assuming idle.")
+                    print(f"  - {process_type_upper}: Not found (considered idle).")
                     continue
+                except (ApiError, NetworkError) as e:
+                    raise ProcessError(f"Cannot proceed: Failed to check status for {process_type_upper} due to API/Network error: {e}") from e
+                except Exception as e:
+                    raise ProcessError(f"Cannot proceed: Unexpected error checking status for {process_type_upper}: {e}") from e
 
-                if current_status in ["RUNNING", "QUEUED", "PENDING"]:
+                if current_status in ["RUNNING", "QUEUED", "NOT FINISHED"]:
                     all_processes_idle_this_pass = False
-                    print(
-                        f"  - {operation_type_upper}: Status is {current_status}. Waiting for completion..."
-                    )
+                    print(f"  - {process_type_upper}: Status is {current_status}. Waiting for completion...")
                     try:
-                        status_data, duration = self.wait_for_scan_to_finish(
-                            operation_type_upper,
-                            scan_code,
-                            params.scan_number_of_tries,
-                            params.scan_wait_time,
-                        )
-                        print(f"  - {operation_type_upper}: Previous run finished.")
-                        logger.debug(
-                            f"Breaking inner loop after waiting for {operation_type_upper} to re-check all statuses."
-                        )
+                        # Use the mixin methods directly since we're now a mixin
+                        if process_type_upper == "EXTRACT_ARCHIVES":
+                            # Use the specialized wait method with 3-second intervals for archive extraction
+                            _, _ = self.wait_for_archive_extraction(scan_code, scan_number_of_tries, scan_wait_time)
+                        else:
+                            _, _ = self.wait_for_scan_to_finish(process_type_upper, scan_code, scan_number_of_tries, scan_wait_time)
+                        print(f"  - {process_type_upper}: Previous run finished.")
+                        logger.debug(f"Breaking inner loop after waiting for {process_type_upper} to re-check all statuses.")
                         break
                     except (ProcessTimeoutError, ProcessError) as wait_err:
-                        raise ProcessError(
-                            f"Cannot proceed: Waiting for existing {operation_type_upper} failed: {wait_err}"
-                        ) from wait_err
+                        raise ProcessError(f"Cannot proceed: Waiting for existing {process_type_upper} failed: {wait_err}") from wait_err
                     except Exception as wait_exc:
-                        raise ProcessError(
-                            f"Cannot proceed: Unexpected error waiting for {operation_type_upper}: {wait_exc}"
-                        ) from wait_exc
+                        raise ProcessError(f"Cannot proceed: Unexpected error waiting for {process_type_upper}: {wait_exc}") from wait_exc
                 else:
-                    print(
-                        f"  - {operation_type_upper}: Status is {current_status} (considered idle)."
-                    )
-
+                    print(f"  - {process_type_upper}: Status is {current_status} (considered idle).")
+            
             if all_processes_idle_this_pass:
                 logger.debug("All processes confirmed idle in this pass. Exiting check loop.")
                 break
-
         print("All Scan processes confirmed idle! Proceeding...")

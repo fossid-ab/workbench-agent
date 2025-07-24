@@ -275,7 +275,8 @@ def wait_for_scan_completion(workbench: WorkbenchAPI, scan_code: str, timeout_mi
         wait_time_seconds = 30
         number_of_tries = (timeout_minutes * 60) // wait_time_seconds
         
-        workbench.wait_for_scan_to_finish(
+        # Use the new process waiters which return (status_data, duration)
+        status_data, duration = workbench.wait_for_scan_to_finish(
             scan_type="SCAN",
             scan_code=scan_code,
             scan_number_of_tries=number_of_tries,
@@ -303,8 +304,18 @@ def wait_for_scan_completion_with_duration(workbench: WorkbenchAPI, scan_code: s
     start_time = time.time()
     
     try:
-        wait_for_scan_completion(workbench, scan_code, timeout_minutes)
-        duration = time.time() - start_time
+        # Convert timeout to tries and wait time (using 30 second intervals)
+        wait_time_seconds = 30
+        number_of_tries = (timeout_minutes * 60) // wait_time_seconds
+        
+        # Use the new process waiters which return (status_data, duration)
+        status_data, duration = workbench.wait_for_scan_to_finish(
+            scan_type="SCAN",
+            scan_code=scan_code,
+            scan_number_of_tries=number_of_tries,
+            scan_wait_time=wait_time_seconds
+        )
+        logger.info("KB scan completed successfully.")
         return True, duration
     except Exception as e:
         duration = time.time() - start_time
@@ -328,7 +339,8 @@ def wait_for_dependency_analysis_completion(workbench: WorkbenchAPI, scan_code: 
         wait_time_seconds = 30
         number_of_tries = (timeout_minutes * 60) // wait_time_seconds
         
-        workbench.wait_for_scan_to_finish(
+        # Use the new process waiters which return (status_data, duration)
+        status_data, duration = workbench.wait_for_scan_to_finish(
             scan_type="DEPENDENCY_ANALYSIS",
             scan_code=scan_code,
             scan_number_of_tries=number_of_tries,
@@ -356,12 +368,84 @@ def wait_for_dependency_analysis_completion_with_duration(workbench: WorkbenchAP
     start_time = time.time()
     
     try:
-        wait_for_dependency_analysis_completion(workbench, scan_code, timeout_minutes)
-        duration = time.time() - start_time
+        # Convert timeout to tries and wait time (using 30 second intervals)
+        wait_time_seconds = 30
+        number_of_tries = (timeout_minutes * 60) // wait_time_seconds
+        
+        # Use the new process waiters which return (status_data, duration)
+        status_data, duration = workbench.wait_for_scan_to_finish(
+            scan_type="DEPENDENCY_ANALYSIS",
+            scan_code=scan_code,
+            scan_number_of_tries=number_of_tries,
+            scan_wait_time=wait_time_seconds
+        )
+        logger.info("Dependency analysis completed successfully.")
         return True, duration
     except Exception as e:
         duration = time.time() - start_time
         logger.error(f"Dependency analysis failed after {format_duration(duration)}: {e}")
+        raise e
+
+
+def wait_for_archive_extraction(workbench: WorkbenchAPI, scan_code: str, timeout_minutes: int) -> None:
+    """
+    Waits for archive extraction to complete using a 3-second interval.
+    
+    Args:
+        workbench: WorkbenchAPI instance
+        scan_code: Scan code to wait for
+        timeout_minutes: Maximum time to wait in minutes
+    """
+    logger.info("Waiting for archive extraction to complete...")
+    
+    try:
+        # Convert timeout to tries using 3-second intervals
+        wait_time_seconds = 3  # Fixed 3-second interval for archive extraction
+        number_of_tries = (timeout_minutes * 60) // wait_time_seconds
+        
+        # Use the specialized archive extraction waiter
+        status_data, duration = workbench.wait_for_archive_extraction(
+            scan_code=scan_code,
+            scan_number_of_tries=number_of_tries,
+            scan_wait_time=wait_time_seconds
+        )
+        logger.info("Archive extraction completed successfully.")
+    except ProcessTimeoutError:
+        raise ProcessTimeoutError(f"Archive extraction timed out after {timeout_minutes} minutes")
+    except Exception as e:
+        raise ProcessError(f"Archive extraction failed: {e}")
+
+
+def wait_for_archive_extraction_with_duration(workbench: WorkbenchAPI, scan_code: str, timeout_minutes: int) -> Tuple[bool, float]:
+    """
+    Enhanced version that waits for archive extraction to complete and returns duration using a 3-second interval.
+    
+    Args:
+        workbench: WorkbenchAPI instance
+        scan_code: Scan code to wait for
+        timeout_minutes: Maximum time to wait in minutes
+        
+    Returns:
+        Tuple of (success, duration_in_seconds)
+    """
+    start_time = time.time()
+    
+    try:
+        # Convert timeout to tries using 3-second intervals
+        wait_time_seconds = 3  # Fixed 3-second interval for archive extraction
+        number_of_tries = (timeout_minutes * 60) // wait_time_seconds
+        
+        # Use the specialized archive extraction waiter
+        status_data, duration = workbench.wait_for_archive_extraction(
+            scan_code=scan_code,
+            scan_number_of_tries=number_of_tries,
+            scan_wait_time=wait_time_seconds
+        )
+        logger.info("Archive extraction completed successfully.")
+        return True, duration
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"Archive extraction failed after {format_duration(duration)}: {e}")
         raise e
 
 

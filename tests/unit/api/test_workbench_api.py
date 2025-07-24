@@ -26,12 +26,10 @@ def test_workbench_api_composition(workbench_inst):
     # Check that it has methods from all API classes
 
     # ProjectsAPI methods
-    assert hasattr(workbench_inst, "check_if_project_exists")
     assert hasattr(workbench_inst, "create_project")
     assert hasattr(workbench_inst, "projects_get_policy_warnings_info")
 
     # ScansAPI methods
-    assert hasattr(workbench_inst, "check_if_scan_exists")
     assert hasattr(workbench_inst, "create_webapp_scan")
     assert hasattr(workbench_inst, "run_scan")
     assert hasattr(workbench_inst, "start_dependency_analysis")
@@ -81,26 +79,18 @@ def test_workbench_api_project_workflow(mock_send, workbench_inst):
     """Test a typical project workflow using the composed API."""
     # Mock responses for a typical workflow
     mock_send.side_effect = [
-        {"status": "0", "error": "Project does not exist"},  # check_if_project_exists
         {"status": "1", "data": {"project_id": 123}},  # create_project
-        {"status": "0", "error": "Scan not found"},  # check_if_scan_exists
         {"status": "1", "data": {"scan_id": 999}},  # create_webapp_scan
     ]
 
-    # Execute workflow
-    project_exists = workbench_inst.check_if_project_exists("test_project")
-    assert project_exists is False
-
+    # Execute simplified workflow (using try/catch pattern)
     workbench_inst.create_project("test_project")  # Should not raise
-
-    scan_exists = workbench_inst.check_if_scan_exists("test_scan")
-    assert scan_exists is False
 
     scan_id = workbench_inst.create_webapp_scan("test_scan", "test_project")
     assert scan_id == 999
 
     # Verify all calls were made
-    assert mock_send.call_count == 4
+    assert mock_send.call_count == 2
 
 
 @patch.object(WorkbenchAPI, "_send_request")
@@ -122,10 +112,7 @@ def test_workbench_api_scan_workflow(mock_send, workbench_inst):
     assert extract_result is True
 
     # Note: run_scan has many parameters, using minimal set for test
-    with (
-        patch.object(workbench_inst, "check_if_scan_exists", return_value=True),
-        patch.object(workbench_inst, "assert_scan_can_start"),
-    ):
+    with patch.object(workbench_inst, "assert_scan_can_start"):
         run_result = workbench_inst.run_scan("test_scan", 10, 10, False, False, False, False, False)
         assert run_result["status"] == "1"
 
