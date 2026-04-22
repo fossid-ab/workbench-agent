@@ -1390,7 +1390,7 @@ def main():
     if params.blind_scan:
         # Upload temporary file with blind scan hashes
         print("Parsed path: ", params.path)
-        workbench.upload_files(params.scan_code, blind_scan_result_path)
+        workbench.upload_files(params.scan_code, blind_scan_result_path, params.chunked_upload)
 
         # delete .fossid file containing hashes (after upload to scan)
         if os.path.isfile(blind_scan_result_path):
