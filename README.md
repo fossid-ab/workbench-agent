@@ -58,6 +58,9 @@ Checks status in a loop. Use also a max limit of time to stop on malfunctioning 
 When scan finishes can return various type of results: list of all licenses identified, list of all components found, 
 policy warnings at scan or project level. Also saves results to a file specified by parameter --path-result PATH_RESULT
 
+Blind scan can be combined with --dependency-analysis if the Workbench instance were the results are uploaded is configured to use FDA.
+Please note that actual content of package manifest files is uploaded (not hashed) to WB instance.
+
 Below are some pros and cons compared with other integration scenarios:
 
 ##### Pros:
