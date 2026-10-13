@@ -394,7 +394,7 @@ class Workbench:
                 )
             # If scan did not finished, print info about progress
             print(
-                "Scan {} is running. Percentage done: {}%  Status: {}".format(
+                "Scan {} is running. Percentage done: {}  Status: {}".format(
                     scan_code, scan_status["percentage_done"], scan_status["status"]
                 )
             )
